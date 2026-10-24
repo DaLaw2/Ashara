@@ -305,33 +305,13 @@ export class LLMGateway {
       modelConfig: request.model.modelConfig,
       providerType: this.registry.providerTypeOf(request.model.provider),
     };
-    const site = scope.site;
-    // Judged before the gate admits the turn: a tool schema the provider refuses is never sent or spent on.
-    for (const [name, tool] of Object.entries(request.tools)) {
-      refuseUnacceptableSchema(
-        { site, provider: target.providerName, providerType: target.providerType, model: target.modelConfig.id, sentAs: `tool "${name}" input` },
-        "tool-input",
-        tool.inputSchema,
-      );
-    }
+    refuseUnacceptableTools(request, target, scope.site);
     const tools = toSdkTools(request.tools);
-    const mode = thinkingModeFor(this.thinking, site);
+    const mode = thinkingModeFor(this.thinking, scope.site);
     const providerOptions = thinkingProviderOptions(target.providerType, mode);
     // The same reserve the catalog's boot check compares every window with (config.ts).
     const budget = turnOutputBudget(target.providerType, mode);
-    const window = target.modelConfig.maxContextTokens;
-    const projection = projectTurnInput(request.priorInputTokens, request);
-    const preflight = contextPreflight(projection, window, budget.maxOutputTokens);
-    if (preflight.kind === "context_budget_exceeded") {
-      // Judged before the gate admits the turn: a request that cannot fit is never sent or spent on.
-      throw new ContextBudgetExceeded({
-        provider: target.providerName,
-        model: target.modelConfig.id,
-        windowTokens: window,
-        outputReserveTokens: budget.maxOutputTokens,
-        breach: { source: "preflight", projectedInputTokens: preflight.projectedInputTokens, basis: describeProjection(projection) },
-      });
-    }
+    refuseOverflowingTurn(request, target, budget.maxOutputTokens);
     const prompt = cachedTurnPrompt(target.providerType, request.system, request.messages);
 
     const params: Parameters<typeof generateText>[0] = {
@@ -351,27 +331,7 @@ export class LLMGateway {
     };
     const { result, requestedAt, admitted } = await this.send({ scope, resolved: target, operation, size, abortSignal: request.abortSignal, request: () => generateText(params) }).catch(
       (error: unknown) => {
-        if (error instanceof GateThrew || error instanceof ModelCallAborted) throw error;
-        const overflow = contextOverflowOf(error, this.contextOverflow);
-        if (overflow !== null) {
-          throw new ContextBudgetExceeded(
-            {
-              provider: target.providerName,
-              model: target.modelConfig.id,
-              windowTokens: window,
-              outputReserveTokens: budget.maxOutputTokens,
-              breach: { source: "provider", providerMessage: overflow },
-            },
-            { cause: error },
-          );
-        }
-        // Whose failure it was travels with it, as for a structured request: no turn has a fallback.
-        throw new ProviderError(
-          target.providerName,
-          `turn request on model=${target.modelConfig.id} failed (${describeErrorChain(error)})`,
-          providerFailureOf(error),
-          { cause: error },
-        );
+        throw this.turnRequestFailure(error, target, budget.maxOutputTokens);
       },
     );
 
@@ -415,6 +375,31 @@ export class LLMGateway {
       provider: target.providerName,
       model: target.modelConfig.id,
     };
+  }
+
+  /** What a turn request that failed is thrown as: a gate's throw and an abort as they are, an overflow as the window's breach. */
+  private turnRequestFailure(error: unknown, target: CallTarget, outputReserveTokens: number): Error {
+    if (error instanceof GateThrew || error instanceof ModelCallAborted) return error;
+    const overflow = contextOverflowOf(error, this.contextOverflow);
+    if (overflow !== null) {
+      return new ContextBudgetExceeded(
+        {
+          provider: target.providerName,
+          model: target.modelConfig.id,
+          windowTokens: target.modelConfig.maxContextTokens,
+          outputReserveTokens,
+          breach: { source: "provider", providerMessage: overflow },
+        },
+        { cause: error },
+      );
+    }
+    // Whose failure it was travels with it, as for a structured request: no turn has a fallback.
+    return new ProviderError(
+      target.providerName,
+      `turn request on model=${target.modelConfig.id} failed (${describeErrorChain(error)})`,
+      providerFailureOf(error),
+      { cause: error },
+    );
   }
 
   private async structured<T>(request: StructuredRequest<T>, scope: CallScope): Promise<StructuredResponse<T>> {
@@ -767,6 +752,36 @@ export class LLMGateway {
 const CONFIGURATION_REJECTION_STATUSES: ReadonlySet<number> = new Set([401, 402, 403, 404]);
 
 /** A provider's rejection of Ashara's configuration, as its own class; `null` for any other request failure. */
+/** Judged before the gate admits a turn: a tool schema the provider refuses is never sent or spent on. */
+function refuseUnacceptableTools(request: TurnRequest, target: CallTarget, site: KnownLLMSite): void {
+  for (const [name, tool] of Object.entries(request.tools)) {
+    refuseUnacceptableSchema(
+      { site, provider: target.providerName, providerType: target.providerType, model: target.modelConfig.id, sentAs: `tool "${name}" input` },
+      "tool-input",
+      tool.inputSchema,
+    );
+  }
+}
+
+/**
+ * Judged before the gate admits a turn: a request whose projected input cannot fit the window beside
+ * the output reserve is never sent or spent on.
+ */
+function refuseOverflowingTurn(request: TurnRequest, target: CallTarget, outputReserveTokens: number): void {
+  const window = target.modelConfig.maxContextTokens;
+  const projection = projectTurnInput(request.priorInputTokens, request);
+  const preflight = contextPreflight(projection, window, outputReserveTokens);
+  if (preflight.kind === "context_budget_exceeded") {
+    throw new ContextBudgetExceeded({
+      provider: target.providerName,
+      model: target.modelConfig.id,
+      windowTokens: window,
+      outputReserveTokens,
+      breach: { source: "preflight", projectedInputTokens: preflight.projectedInputTokens, basis: describeProjection(projection) },
+    });
+  }
+}
+
 function configurationRejectionOf(error: unknown, resolved: CallTarget): ProviderConfigurationRejected | null {
   if (!APICallError.isInstance(error) || error.statusCode === undefined) return null;
   if (!CONFIGURATION_REJECTION_STATUSES.has(error.statusCode)) return null;

@@ -56,33 +56,10 @@ function routedHere(executed: Exclude<DispatchResult, { status: "completed" }>, 
 export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem, executed: DispatchResult): Promise<RoutedExecution> {
   switch (executed.status) {
     case "environment_change_requested":
-      // Not a failure to retry: only environment work may change the recipe, so a replan would
-      // meet the same refusal. An environment task is opened for the platform role and the item
-      // waits on it, within a bound; its branch is already deleted, so it
-      // restarts from main once the environment has changed.
-      await routeAsEnvironmentChange(deps, task, executed);
-      return routedHere(executed, blockedResult(task.id, executed.detail));
-
     case "checks_stale":
-      // Not a task failure (a replan keeps the item id, so it would meet the same checks): the
-      // check task is reopened to write them again and the item waits on it, within a bound.
-      await routeAsStaleChecks(deps, task, executed);
-      return routedHere(executed, blockedResult(task.id, executed.detail));
-
     case "disputed":
-      // Not a task failure and no lesson: the check is its author's to
-      // answer, so the check task is reopened with the dispute and the item waits on it, within a
-      // bound of disputes per check task; past it the item is given up and its plan repaired.
-      await routeAsDisputed(deps, task, executed);
-      return routedHere(executed, blockedResult(task.id, executed.detail));
-
     case "suite_review_problems":
-      // Not the review's failure and no lesson: the checks are their
-      // authors' to fix, so each named check task is reopened with the findings and the review waits
-      // on them to read the new suites, each check task reopened at most once; past that the review
-      // is given up and its plan repaired.
-      await routeAsSuiteReview(deps, task, executed);
-      return routedHere(executed, blockedResult(task.id, executed.detail));
+      return routeAsReopened(deps, task, executed);
 
     case "environment_blocked":
       // Not a task failure: the machines the task runs on, or Ashara's own Z0 machinery, failed, so
@@ -92,25 +69,9 @@ export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem,
       return routedHere(executed, { taskId: task.id, status: "interrupted", detail: executed.detail });
 
     case "environment_undefined":
-      // Not a task failure, so never Failed: a re-dispatch meets the same main. Nothing re-defines or
-      // rebuilds main's environment while every environment task is done, so the task is given up
-      // and its plan repaired, which can plan a new environment (no item waits on a person). No
-      // agent ran, so the dispatch is given back: the count is attempts at the task's work.
-      await routeAsGivenUp(deps, task.id, { source: "environment_undefined", reason: executed.detail }, "refund");
-      return routedHere(executed, blockedResult(task.id, executed.detail));
-
     case "owner_unresolved":
-      // No roster role can work the task: a re-dispatch meets the same owner and the same roster,
-      // and no production path appends a roster revision after the first, so the task is given up,
-      // never Failed, and its plan repaired: the repair staffs its new tasks from the latest roster.
-      // No agent ran, so the dispatch is given back.
-      await routeAsGivenUp(
-        deps,
-        task.id,
-        { source: "owner_unresolved", ownerRoleId: executed.ownerRoleId, rosterRevision: executed.rosterRevision, reason: executed.reason },
-        "refund",
-      );
-      return routedHere(executed, blockedResult(task.id, executed.detail));
+    case "no_wider_model":
+      return routeAsUnworkable(deps, task, executed);
 
     case "interrupted":
       // The shutdown stopped the attempt; it did not fail. No FailureRouter and no lesson: the
@@ -126,18 +87,6 @@ export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem,
       // FailureRouter's replan would only spend the work ledger on it (a
       // bound reached escalates). The task goes on to a model whose window is larger, or is given up.
       await routeAsContextExceeded(deps, task, executed);
-      return routedHere(executed, blockedResult(task.id, executed.detail));
-
-    case "no_wider_model":
-      // The catalog holds no model whose window is larger than one the task overflowed, and every
-      // re-dispatch meets the same catalog: given up, never requeued nor a fault of Ashara's, and its
-      // plan repaired, which can cut the work smaller. No agent ran, so the dispatch is given back.
-      await routeAsGivenUp(
-        deps,
-        task.id,
-        { source: "no_wider_model", overflowedWindowTokens: executed.overflowedWindowTokens, reason: executed.detail },
-        "refund",
-      );
       return routedHere(executed, blockedResult(task.id, executed.detail));
 
     case "prerequisite_needed":
@@ -169,6 +118,86 @@ export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem,
         verdict: executed.verdict,
         routedHere: false,
       };
+  }
+}
+
+/** A result another task's work answers: that task is opened or reopened and the item waits on it, within a bound. */
+async function routeAsReopened(
+  deps: ExecutionRoutingDeps,
+  task: WorkItem,
+  executed: Extract<DispatchResult, { status: "environment_change_requested" | "checks_stale" | "disputed" | "suite_review_problems" }>,
+): Promise<RoutedExecution> {
+  switch (executed.status) {
+    case "environment_change_requested":
+      // Not a failure to retry: only environment work may change the recipe, so a replan would
+      // meet the same refusal. An environment task is opened for the platform role and the item
+      // waits on it, within a bound; its branch is already deleted, so it
+      // restarts from main once the environment has changed.
+      await routeAsEnvironmentChange(deps, task, executed);
+      return routedHere(executed, blockedResult(task.id, executed.detail));
+
+    case "checks_stale":
+      // Not a task failure (a replan keeps the item id, so it would meet the same checks): the
+      // check task is reopened to write them again and the item waits on it, within a bound.
+      await routeAsStaleChecks(deps, task, executed);
+      return routedHere(executed, blockedResult(task.id, executed.detail));
+
+    case "disputed":
+      // Not a task failure and no lesson: the check is its author's to
+      // answer, so the check task is reopened with the dispute and the item waits on it, within a
+      // bound of disputes per check task; past it the item is given up and its plan repaired.
+      await routeAsDisputed(deps, task, executed);
+      return routedHere(executed, blockedResult(task.id, executed.detail));
+
+    case "suite_review_problems":
+      // Not the review's failure and no lesson: the checks are their
+      // authors' to fix, so each named check task is reopened with the findings and the review waits
+      // on them to read the new suites, each check task reopened at most once; past that the review
+      // is given up and its plan repaired.
+      await routeAsSuiteReview(deps, task, executed);
+      return routedHere(executed, blockedResult(task.id, executed.detail));
+  }
+}
+
+/** A result every re-dispatch would meet again, with no agent run: the task is given up, its dispatch given back, and its plan repaired. */
+async function routeAsUnworkable(
+  deps: ExecutionRoutingDeps,
+  task: WorkItem,
+  executed: Extract<DispatchResult, { status: "environment_undefined" | "owner_unresolved" | "no_wider_model" }>,
+): Promise<RoutedExecution> {
+  switch (executed.status) {
+    case "environment_undefined":
+      // Not a task failure, so never Failed: a re-dispatch meets the same main. Nothing re-defines or
+      // rebuilds main's environment while every environment task is done, so the task is given up
+      // and its plan repaired, which can plan a new environment (no item waits on a person). No
+      // agent ran, so the dispatch is given back: the count is attempts at the task's work.
+      await routeAsGivenUp(deps, task.id, { source: "environment_undefined", reason: executed.detail }, "refund");
+      return routedHere(executed, blockedResult(task.id, executed.detail));
+
+    case "owner_unresolved":
+      // No roster role can work the task: a re-dispatch meets the same owner and the same roster,
+      // and no production path appends a roster revision after the first, so the task is given up,
+      // never Failed, and its plan repaired: the repair staffs its new tasks from the latest roster.
+      // No agent ran, so the dispatch is given back.
+      await routeAsGivenUp(
+        deps,
+        task.id,
+        { source: "owner_unresolved", ownerRoleId: executed.ownerRoleId, rosterRevision: executed.rosterRevision, reason: executed.reason },
+        "refund",
+      );
+      return routedHere(executed, blockedResult(task.id, executed.detail));
+
+    case "no_wider_model":
+      // The catalog holds no model whose window is larger than one the task overflowed, and every
+      // re-dispatch meets the same catalog: given up, never requeued nor a fault of Ashara's, and its
+      // plan repaired, which can cut the work smaller. No agent ran, so the dispatch is given back.
+      await routeAsGivenUp(
+        deps,
+        task.id,
+        { source: "no_wider_model", overflowedWindowTokens: executed.overflowedWindowTokens, reason: executed.detail },
+        "refund",
+      );
+      return routedHere(executed, blockedResult(task.id, executed.detail));
   }
 }
 

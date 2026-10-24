@@ -5,10 +5,11 @@
  * composition root by context, the routes by resource, a cycle by step, a dispatch by phase. The bound
  * is 120 lines: with the longest bodies split that way no function of the tree is past it, so the
  * allowlist holds no entry a split could remove, and a body that grows past it is split or allowed
- * on record. packages/integration is left out: it holds the cross-package tests and the lifecycle
- * simulator, not product code. A function that keeps a longer body is named in LONG_FUNCTIONS_ALLOWED
- * with its reason; an entry with no reason fails, and so does one that names no function past the
- * bound, so the list cannot outlive the functions it excuses.
+ * on record. packages/integration is scanned like every package: its lifecycle simulator and its
+ * suite fixtures are shared test infrastructure every integration test builds on, and they grow as
+ * the product does. A function that keeps a longer body is named in LONG_FUNCTIONS_ALLOWED with its
+ * reason; an entry with no reason fails, and so does one that names no function past the bound, so
+ * the list cannot outlive the functions it excuses.
  */
 
 import ts from "typescript";
@@ -17,7 +18,7 @@ import { functionName, productionFiles } from "./production-source.js";
 
 const FUNCTION_LENGTH = "function-length";
 const FUNCTION_LINE_BOUND = 120;
-const LEFT_OUT = "packages/integration/";
+const INTEGRATION = "packages/integration/";
 
 interface LongFunctionAllowed {
   /** Root-relative, `/`-separated. */
@@ -64,7 +65,7 @@ function packageOf(file: string): string {
 export function longFunctions(context: LintContext, allowed: readonly LongFunctionAllowed[]): Violation[] {
   const violations: Violation[] = [];
   const used = new Set<LongFunctionAllowed>();
-  const files = productionFiles(context).filter(([file]) => !file.startsWith(LEFT_OUT));
+  const files = productionFiles(context);
   for (const [file, source] of files) {
     for (const span of functionSpans(file, source)) {
       if (span.lines <= FUNCTION_LINE_BOUND) continue;
@@ -84,6 +85,9 @@ export function longFunctions(context: LintContext, allowed: readonly LongFuncti
   }
   if (!files.some(([file]) => file.startsWith("packages/"))) {
     violations.push({ file: "packages", line: 0, fromPkg: "*", specifier: FUNCTION_LENGTH, reason: "no production source to scan; a scan of nothing would pass" });
+  }
+  if (!files.some(([file]) => file.startsWith(INTEGRATION))) {
+    violations.push({ file: "packages/integration", line: 0, fromPkg: "integration", specifier: FUNCTION_LENGTH, reason: "no integration source to scan; its simulator and fixtures are held to the bound too" });
   }
   if (!files.some(([file]) => file.startsWith("scripts/"))) {
     violations.push({ file: "scripts", line: 0, fromPkg: "scripts", specifier: FUNCTION_LENGTH, reason: "no script to scan; a scan of nothing would pass" });

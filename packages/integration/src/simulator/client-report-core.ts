@@ -353,36 +353,7 @@ export function tableProblems(
     return { guarantee, ...judged(guarantee, read, onCommit) };
   });
 
-  for (const { guarantee, verdict, reason } of expected) {
-    const rows = stored.filter((row) => row.guaranteeId === guarantee.id);
-    const [row] = rows;
-    if (rows.length !== 1 || row === undefined) {
-      problems.push(
-        `it stores ${rows.length} verdict(s) for ${guarantee.id}; every guarantee in force has exactly one`,
-      );
-      continue;
-    }
-    if (row.sweepId !== source.sweepId || row.visionVersion !== version) {
-      problems.push(
-        `its verdict on ${guarantee.id} names sweep ${row.sweepId ?? "none"} at vision v${row.visionVersion}; ` +
-          `it was judged on sweep ${source.sweepId ?? "none"} at v${version}`,
-      );
-    }
-    if (row.verdict !== verdict || row.reason !== reason) {
-      const storedAs = `${row.verdict}${row.reason === null ? "" : ` (${row.reason})`}`;
-      problems.push(
-        `it stores ${guarantee.id} as ${storedAs}; its evidence reads ` +
-          `${verdict}${reason === null ? "" : ` (${reason})`}`,
-      );
-    }
-  }
-  const strays = stored.filter((row) => !ids.includes(row.guaranteeId));
-  if (strays.length > 0) {
-    problems.push(
-      `it stores verdicts for ${strays.map((row) => row.guaranteeId).join(", ")}, which vision v${version} ` +
-        `does not hold`,
-    );
-  }
+  problems.push(...storedVerdictProblems(stored, expected, { sweepId: source.sweepId, version }));
 
   const head =
     source.sweepId === null
@@ -406,6 +377,69 @@ export function tableProblems(
     if (line !== undefined && said !== told)
       problems.push(`its table says ${guarantee.id} is ${said ?? "nothing"}; its evidence reads ${told}`);
   }
+  const punched = punchListProblem(report.body, stored, expected);
+  if (punched !== null) problems.push(punched);
+  return problems;
+}
+
+/** A guarantee in force with the verdict its evidence reads. */
+type ExpectedVerdict = { readonly guarantee: GuaranteeInForce } & TableVerdict;
+
+/**
+ * Where the verdicts stored beside a message depart from what its evidence reads: each guarantee in
+ * force has exactly one, naming the sweep and version it was judged at, and none names a guarantee
+ * the version does not hold.
+ */
+function storedVerdictProblems(
+  stored: ReportRecords["verdicts"],
+  expected: readonly ExpectedVerdict[],
+  judgedAt: { readonly sweepId: string | null; readonly version: number },
+): string[] {
+  const { sweepId, version } = judgedAt;
+  const problems: string[] = [];
+  for (const { guarantee, verdict, reason } of expected) {
+    const rows = stored.filter((row) => row.guaranteeId === guarantee.id);
+    const [row] = rows;
+    if (rows.length !== 1 || row === undefined) {
+      problems.push(
+        `it stores ${rows.length} verdict(s) for ${guarantee.id}; every guarantee in force has exactly one`,
+      );
+      continue;
+    }
+    if (row.sweepId !== sweepId || row.visionVersion !== version) {
+      problems.push(
+        `its verdict on ${guarantee.id} names sweep ${row.sweepId ?? "none"} at vision v${row.visionVersion}; ` +
+          `it was judged on sweep ${sweepId ?? "none"} at v${version}`,
+      );
+    }
+    if (row.verdict !== verdict || row.reason !== reason) {
+      const storedAs = `${row.verdict}${row.reason === null ? "" : ` (${row.reason})`}`;
+      problems.push(
+        `it stores ${guarantee.id} as ${storedAs}; its evidence reads ` +
+          `${verdict}${reason === null ? "" : ` (${reason})`}`,
+      );
+    }
+  }
+  const ids = expected.map((each) => each.guarantee.id);
+  const strays = stored.filter((row) => !ids.includes(row.guaranteeId));
+  if (strays.length > 0) {
+    problems.push(
+      `it stores verdicts for ${strays.map((row) => row.guaranteeId).join(", ")}, which vision v${version} ` +
+        `does not hold`,
+    );
+  }
+  return problems;
+}
+
+/**
+ * Where a message's punch list departs from its verdicts: it names every failure, then every unjudged
+ * guarantee, then every pass stored as resting on an assumption the client has not confirmed.
+ */
+function punchListProblem(
+  body: string,
+  stored: ReportRecords["verdicts"],
+  expected: readonly ExpectedVerdict[],
+): string | null {
   const atRisk = new Set(
     stored.filter((row) => row.verdict === "pass" && row.basis === "assumed-unconfirmed").map((row) => row.guaranteeId),
   );
@@ -414,15 +448,15 @@ export function tableProblems(
     ...expected.filter((each) => each.verdict === "unjudged"),
     ...expected.filter((each) => each.verdict === "pass" && atRisk.has(each.guarantee.id)),
   ].map((each) => each.guarantee.id);
-  const punch = paragraph(report.body, PUNCH_HEAD);
-  if (punch === null) problems.push("it carries no punch list");
-  else if (JSON.stringify(idsListed(punch)) !== JSON.stringify(punched)) {
-    problems.push(
+  const punch = paragraph(body, PUNCH_HEAD);
+  if (punch === null) return "it carries no punch list";
+  if (JSON.stringify(idsListed(punch)) !== JSON.stringify(punched)) {
+    return (
       `its punch list names [${idsListed(punch).join(", ")}]; the verdicts put [${punched.join(", ")}] on ` +
-        `it, failures first`,
+      `it, failures first`
     );
   }
-  return problems;
+  return null;
 }
 
 /**

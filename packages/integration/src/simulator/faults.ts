@@ -418,6 +418,121 @@ class TerminationUnseen extends Error {
 const CHECKOUT_LABELS = 8;
 
 /**
+ * A query sent through the fault scheduler: `send` runs it, and `kill` ends its connection's backend
+ * when that fault is drawn.
+ */
+type FaultedQuery = (
+  given: readonly unknown[],
+  send: (args: unknown[]) => Promise<unknown>,
+  kill: (() => Promise<void>) | null,
+) => Promise<unknown>;
+
+/** Every query of one instance: planted, labelled, given its fate by the scheduler, and its write admitted. */
+function faultedQuery(context: SeamContext, plant: QueryPlant | null): FaultedQuery {
+  return async (given, send, kill) => {
+    context.queried(given);
+    const args = plant?.(given) ?? [...given];
+    const run = (): Promise<unknown> => send(args);
+    const label = labelOfQuery(args);
+    // Killing the transaction needs a checked-out connection's backend: a pool query has none.
+    const effective: FaultKind[] = kill === null ? ["db-query-failed"] : ["db-query-failed", "db-transaction-killed"];
+    const fate = await context.scheduler.enter(context.instance, "db", label, effective);
+    if (fate.fault === "db-query-failed")
+      throw pgError("40001", "could not serialize access due to concurrent update (simulated)");
+    if (fate.fault === "db-transaction-killed" && kill !== null) await kill();
+    const value = await run();
+    context.admissions.written(label, args);
+    context.scheduler.leave(context.instance, fate, "db", label);
+    await context.scheduler.returned("db", label);
+    return value;
+  };
+}
+
+/**
+ * Kills the connection's backend between two queries of its transaction, and returns only
+ * once the client has seen the connection end: its error then reached `onError` with no
+ * query in flight (the uncaught error that is production's fatal exit). The query after
+ * it would otherwise race the termination's arrival, and whether the process exited this
+ * cycle or a later one would depend on the machine's load, not the seed. Null when the
+ * client names no backend pid.
+ */
+function backendKill(context: SeamContext, client: pg.PoolClient): (() => Promise<void>) | null {
+  const pid = clientPid.safeParse(client);
+  if (!pid.success) return null;
+  return async (): Promise<void> => {
+    const ended = new Promise<void>((resolve) => client.once("end", () => resolve()));
+    await context.terminateBackend(pid.data.processID);
+    let timer: NodeJS.Timeout | undefined;
+    const unseen = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new TerminationUnseen(context.instance.name, pid.data.processID)),
+        TERMINATION_SEEN_MS,
+      );
+    });
+    try {
+      await Promise.race([ended, unseen]);
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+}
+
+/** The pool's connect: a connect fault drawn first, then a checked-out client whose queries go through `query`. */
+function faultingConnect(context: SeamContext, target: pg.Pool, query: FaultedQuery): () => Promise<pg.PoolClient> {
+  return async () => {
+    const fate = await context.scheduler.enter(context.instance, "db", "connect", ["db-unreachable"]);
+    if (fate.fault === "db-unreachable") {
+      /* eslint-disable-next-line no-restricted-syntax -- the simulated fault is node-postgres's own throw: a
+         plain Error with a code, which the product's fault classifier must meet as it is */
+      throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432 (simulated)"), {
+        code: "ECONNREFUSED",
+      });
+    }
+    const client = await target.connect();
+    const handBack = context.interleaver.connectionHeld();
+    try {
+      context.scheduler.leave(context.instance, fate, "db", "connect");
+    } catch (err) {
+      handBack();
+      // The process died holding a connection nothing will release: the connection dies with
+      // it. Left checked out, it would hold the pool's end (the run's teardown) forever.
+      client.release(true);
+      throw err;
+    }
+    // pg-pool removes its own error listener while a client is checked out (pg-pool
+    // index.js _acquireClient): an error between queries then has no listener in production.
+    const onError = (err: Error): void => {
+      context.instance.dead = true;
+      context.instance.fatal ??= `uncaught pg error on a checked-out connection: ${err.message}`;
+    };
+    client.on("error", onError);
+    const sent: string[] = [];
+    context.instance.checkouts.set(client, sent);
+    const kill = backendKill(context, client);
+    return new Proxy(client, {
+      get(inner, innerProperty, innerReceiver) {
+        if (innerProperty === "release") {
+          return (...args: unknown[]) => {
+            handBack();
+            inner.removeListener("error", onError);
+            context.instance.checkouts.delete(inner);
+            return Reflect.apply(inner.release, inner, args);
+          };
+        }
+        if (innerProperty === "query") {
+          return (...args: unknown[]) => {
+            if (sent.length < CHECKOUT_LABELS) sent.push(labelOfQuery(args));
+            return query(args, (given) => Reflect.apply(inner.query, inner, given), kill);
+          };
+        }
+        const value: unknown = Reflect.get(inner, innerProperty, innerReceiver);
+        return typeof value === "function" ? value.bind(inner) : value;
+      },
+    });
+  };
+}
+
+/**
  * The pool factory of one instance: `application_name` names the instance so a crash can
  * terminate exactly its backends, and every query and connect takes a ticket.
  */
@@ -429,110 +544,14 @@ export function faultingPools(
   return (config) => {
     const pool = new pg.Pool({ ...config, application_name: applicationName, max: 4 });
     context.instance.pools.push(pool);
-    const query = async (
-      given: readonly unknown[],
-      send: (args: unknown[]) => Promise<unknown>,
-      kill: (() => Promise<void>) | null,
-    ): Promise<unknown> => {
-      context.queried(given);
-      const args = plant?.(given) ?? [...given];
-      const run = (): Promise<unknown> => send(args);
-      const label = labelOfQuery(args);
-      // Killing the transaction needs a checked-out connection's backend: a pool query has none.
-      const effective: FaultKind[] = kill === null ? ["db-query-failed"] : ["db-query-failed", "db-transaction-killed"];
-      const fate = await context.scheduler.enter(context.instance, "db", label, effective);
-      if (fate.fault === "db-query-failed")
-        throw pgError("40001", "could not serialize access due to concurrent update (simulated)");
-      if (fate.fault === "db-transaction-killed" && kill !== null) await kill();
-      const value = await run();
-      context.admissions.written(label, args);
-      context.scheduler.leave(context.instance, fate, "db", label);
-      await context.scheduler.returned("db", label);
-      return value;
-    };
+    const query = faultedQuery(context, plant);
+    const connect = faultingConnect(context, pool, query);
     return new Proxy(pool, {
       get(target, property, receiver) {
         if (property === "query") {
           return (...args: unknown[]) => query(args, (sent) => Reflect.apply(target.query, target, sent), null);
         }
-        if (property === "connect") {
-          return async () => {
-            const fate = await context.scheduler.enter(context.instance, "db", "connect", ["db-unreachable"]);
-            if (fate.fault === "db-unreachable") {
-              /* eslint-disable-next-line no-restricted-syntax -- the simulated fault is node-postgres's own throw: a
-                 plain Error with a code, which the product's fault classifier must meet as it is */
-              throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432 (simulated)"), {
-                code: "ECONNREFUSED",
-              });
-            }
-            const client = await target.connect();
-            const handBack = context.interleaver.connectionHeld();
-            try {
-              context.scheduler.leave(context.instance, fate, "db", "connect");
-            } catch (err) {
-              handBack();
-              // The process died holding a connection nothing will release: the connection dies with
-              // it. Left checked out, it would hold the pool's end (the run's teardown) forever.
-              client.release(true);
-              throw err;
-            }
-            // pg-pool removes its own error listener while a client is checked out (pg-pool
-            // index.js _acquireClient): an error between queries then has no listener in production.
-            const onError = (err: Error): void => {
-              context.instance.dead = true;
-              context.instance.fatal ??= `uncaught pg error on a checked-out connection: ${err.message}`;
-            };
-            client.on("error", onError);
-            const sent: string[] = [];
-            context.instance.checkouts.set(client, sent);
-            const pid = clientPid.safeParse(client);
-            /**
-             * Kills the connection's backend between two queries of its transaction, and returns only
-             * once the client has seen the connection end: its error then reached `onError` with no
-             * query in flight (the uncaught error that is production's fatal exit). The query after
-             * it would otherwise race the termination's arrival, and whether the process exited this
-             * cycle or a later one would depend on the machine's load, not the seed.
-             */
-            const kill = pid.success
-              ? async (): Promise<void> => {
-                  const ended = new Promise<void>((resolve) => client.once("end", () => resolve()));
-                  await context.terminateBackend(pid.data.processID);
-                  let timer: NodeJS.Timeout | undefined;
-                  const unseen = new Promise<never>((_, reject) => {
-                    timer = setTimeout(
-                      () => reject(new TerminationUnseen(context.instance.name, pid.data.processID)),
-                      TERMINATION_SEEN_MS,
-                    );
-                  });
-                  try {
-                    await Promise.race([ended, unseen]);
-                  } finally {
-                    clearTimeout(timer);
-                  }
-                }
-              : null;
-            return new Proxy(client, {
-              get(inner, innerProperty, innerReceiver) {
-                if (innerProperty === "release") {
-                  return (...args: unknown[]) => {
-                    handBack();
-                    inner.removeListener("error", onError);
-                    context.instance.checkouts.delete(inner);
-                    return Reflect.apply(inner.release, inner, args);
-                  };
-                }
-                if (innerProperty === "query") {
-                  return (...args: unknown[]) => {
-                    if (sent.length < CHECKOUT_LABELS) sent.push(labelOfQuery(args));
-                    return query(args, (given) => Reflect.apply(inner.query, inner, given), kill);
-                  };
-                }
-                const value: unknown = Reflect.get(inner, innerProperty, innerReceiver);
-                return typeof value === "function" ? value.bind(inner) : value;
-              },
-            });
-          };
-        }
+        if (property === "connect") return connect;
         const value: unknown = Reflect.get(target, property, receiver);
         return typeof value === "function" ? value.bind(target) : value;
       },

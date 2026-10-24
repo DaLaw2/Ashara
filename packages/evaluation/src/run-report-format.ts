@@ -307,16 +307,14 @@ function perGoal(spend: Spend, goals: number): string {
   return goals === 0 ? "per goal task undefined (no goal task)" : `${usd(spend.usd / goals)} per goal task`;
 }
 
-/**
- * Spend per Epic and per goal task, and mean input tokens per agent call and the peak
- * context utilisation of any call per Epic. Each task's spend is charged to the goal task it serves (servedBy) in that goal task's
- * Epic; a goal task's calls from its second dev session on are its rework. Spend that serves no
- * goal task is printed on its Epic's unattributed line, and llm_calls with no task on the project-level
- * line, never dropped or spread; the Epics' totals and the project-level line are checked to add up to
- * every llm_calls row of the project.
- */
-function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: string[]; readonly violation: boolean } {
-  const items = new Map(evidence.workItems.map((w) => [w.id, w]));
+/** Every Epic's spend with its goal tasks, and the tasks of the evidence that are no work item of the project. */
+interface CostLedger {
+  readonly epics: ReadonlyMap<string | null, EpicSpend>;
+  readonly orphanTasks: readonly string[];
+}
+
+/** Charges each task's calls to the goal task it serves in that goal task's Epic, or to its Epic's unattributed line. */
+function chargeTasks(evidence: RunEvidence, items: ReadonlyMap<string, WorkItemEvidence>): CostLedger {
   const epics = new Map<string | null, EpicSpend>();
   const epicFor = (epic: WorkItemEvidence | null): EpicSpend => {
     const key = epic === null ? null : epic.id;
@@ -335,7 +333,6 @@ function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: st
     epicFor(epicOf(w, items)).goals.push(g);
   }
 
-  const lines: string[] = [];
   const orphanTasks: string[] = [];
   for (const task of evidence.tasks) {
     const item = items.get(task.taskId);
@@ -371,14 +368,19 @@ function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: st
       addSpend(goal.rework, task.calls.filter((c) => reworkFrom !== null && c.createdAt.getTime() >= reworkFrom));
     }
   }
+  return { epics, orphanTasks };
+}
 
-  lines.push(
-    "",
-    "cost per Epic and goal task (measured cost_usd; a goal task is a task with work_items.level 'Task' and " +
-      "task_spec.origin 'decomposition'; its check tasks by task_spec.checksFor, its environment changes by work_items.repairs_task_id, " +
-      "its rework as its calls from its second dev session on; Epic by the work_items.parent_id chain; " +
-      "project-level spend, llm_calls with no task, is in no Epic and has its own line):",
-  );
+/** What the Epic lines add up to, for the run line and the reconciliation. */
+interface EpicSums {
+  readonly attributed: Spend;
+  readonly unattributed: Spend;
+  readonly inEpics: Spend;
+  readonly goalCount: number;
+}
+
+/** One line per Epic, one per goal task of it, and its unattributed line when it has one, appended to `lines`. */
+function epicLines(epics: ReadonlyMap<string | null, EpicSpend>, lines: string[]): EpicSums {
   let attributed = noSpend();
   let unattributed = noSpend();
   let inEpics = noSpend();
@@ -412,6 +414,28 @@ function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: st
       );
     }
   }
+  return { attributed, unattributed, inEpics, goalCount };
+}
+
+/**
+ * Spend per Epic and per goal task, and mean input tokens per agent call and the peak
+ * context utilisation of any call per Epic. Each task's spend is charged to the goal task it serves (servedBy) in that goal task's
+ * Epic; a goal task's calls from its second dev session on are its rework. Spend that serves no
+ * goal task is printed on its Epic's unattributed line, and llm_calls with no task on the project-level
+ * line, never dropped or spread; the Epics' totals and the project-level line are checked to add up to
+ * every llm_calls row of the project.
+ */
+function costLines(evidence: RunEvidence, overall: Totals): { readonly lines: string[]; readonly violation: boolean } {
+  const items = new Map(evidence.workItems.map((w) => [w.id, w]));
+  const { epics, orphanTasks } = chargeTasks(evidence, items);
+  const lines: string[] = [
+    "",
+    "cost per Epic and goal task (measured cost_usd; a goal task is a task with work_items.level 'Task' and " +
+      "task_spec.origin 'decomposition'; its check tasks by task_spec.checksFor, its environment changes by work_items.repairs_task_id, " +
+      "its rework as its calls from its second dev session on; Epic by the work_items.parent_id chain; " +
+      "project-level spend, llm_calls with no task, is in no Epic and has its own line):",
+  ];
+  const { attributed, unattributed, inEpics, goalCount } = epicLines(epics, lines);
   const projectCalls = evidence.calls.filter((row) => row.taskId === null);
   const project: Spend = {
     usd: projectCalls.reduce((sum, row) => sum + row.measuredUsd, 0),

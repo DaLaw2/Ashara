@@ -285,13 +285,13 @@ describe("function-length", () => {
   /** A function declaration spanning `lines` lines, its opening and closing lines included. */
   const spanning = (name: string, lines: number): string =>
     [`export function ${name}(): number {`, "  let n = 0;", ...Array.from({ length: lines - 4 }, () => "  n += 1;"), "  return n;", "}"].join("\n");
-  /** A tree of `files` under quality, with one script so neither half of the scan is empty. */
-  const tree = (files: Readonly<Record<string, string>>): LintContext => {
+  /** A tree of `files` under quality and `integration` under integration, with one script, so no part of the scan is empty. */
+  const tree = (files: Readonly<Record<string, string>>, integration: Readonly<Record<string, string>> = { "harness.ts": "export const harness = 1;\n" }): LintContext => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "function-length-"));
     scratch = root;
     fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
     fs.writeFileSync(path.join(root, "scripts", "tool.ts"), "export const tool = 1;\n");
-    return { ...homesTree("", { quality: files }), root };
+    return { ...homesTree("", { quality: files, integration }), root };
   };
   const sites = (violations: readonly Violation[]): string[] => violations.map((v) => `${v.file}:${v.line}`);
 
@@ -327,6 +327,16 @@ describe("function-length", () => {
   test("a tree with no scripts/ to scan fails closed", () => {
     const violations = functionLength(homesTree("", { quality: { "result.ts": "export const clean = 1;\n" } }));
     expect(violations.map((v) => v.reason)).toContainEqual(expect.stringContaining("no script to scan"));
+  });
+
+  test("a function of the integration source past the bound is a violation, as in any package", () => {
+    const context = tree({ "result.ts": "export const clean = 1;\n" }, { "simulator/long.ts": spanning("long", 121), "simulator/long.test.ts": spanning("inTest", 200) });
+    expect(sites(functionLength(context))).toEqual(["packages/integration/src/simulator/long.ts:1"]);
+  });
+
+  test("a tree with no integration source to scan fails closed", () => {
+    const violations = functionLength(tree({ "result.ts": "export const clean = 1;\n" }, {}));
+    expect(violations.map((v) => v.reason)).toEqual([expect.stringContaining("no integration source to scan")]);
   });
 
   test("the repository's production functions keep to the line bound", () => {

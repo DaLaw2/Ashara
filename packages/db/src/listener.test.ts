@@ -41,6 +41,17 @@ describe("PG listener trace", () => {
   });
 });
 
+describe("PG listener methods", () => {
+  test("keep working when destructured from the listener", async () => {
+    const logger = recordingLogger();
+    const { stop, backendPid } = await listenForEvents("postgresql://ashara@127.0.0.1:1/none", () => {}, logger);
+
+    expect(backendPid()).toBeNull();
+    await expect(stop()).resolves.toBeUndefined();
+    expect(backendPid()).toBeNull();
+  });
+});
+
 describe("PG listener cleanup", () => {
   let listener: PgListener | null = null;
 

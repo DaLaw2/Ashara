@@ -2,10 +2,11 @@ import pg from "pg";
 import { z } from "zod";
 import type { Logger } from "@ashara/shared";
 
+/** Its functions hold no `this`: a caller may destructure them. */
 export interface PgListener {
   /** Backend pid of the live LISTEN connection; null while not connected. */
-  backendPid(): number | null;
-  stop(): Promise<void>;
+  readonly backendPid: () => number | null;
+  readonly stop: () => Promise<void>;
 }
 
 const BackendPidRowSchema = z.object({ pid: z.number().int() });
@@ -23,11 +24,11 @@ export async function listenForEvents(
 ): Promise<PgListener> {
   const listener = new EventsListener(databaseUrl, callback, logger);
   await listener.start();
-  return listener;
+  return { backendPid: () => listener.backendPid(), stop: () => listener.stop() };
 }
 
 /** The live LISTEN connection, the reconnect pending while there is none, and whether it was stopped. */
-class EventsListener implements PgListener {
+class EventsListener {
   private stopped = false;
   private client: pg.Client | null = null;
   private pid: number | null = null;
