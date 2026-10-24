@@ -5,10 +5,8 @@ import { parseWorkKind } from "../acl/organization-acl.js";
 import { failureVerdictSchema } from "../acl/quality-acl.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
 import { ProjectHaltRepository } from "./project-halt.js";
-import type { WorkItemRowRepository } from "./work-item.js";
+import type { WorkItemRow, WorkItemRowRepository } from "./work-item.js";
 import type { StoredFailureVerdict, WorkItem, WorkItemRepository } from "../domain/index.js";
-
-type DbRow = Awaited<ReturnType<WorkItemRowRepository["findById"]>>;
 
 /**
  * The failure_verdict column read through Quality's schema. A value that does not
@@ -42,7 +40,7 @@ export function workItemSaveRow(item: WorkItem): {
   };
 }
 
-export function rowToWorkItem(row: NonNullable<DbRow>): WorkItem {
+export function rowToWorkItem(row: WorkItemRow): WorkItem {
   const jsonb = parseWorkItemJsonb(row);
   return {
     id: parseWorkItemId(row.id, "work_items.id"),

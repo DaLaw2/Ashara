@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
-import { projectStatusOf, projectWorkItems } from "@ashara/delivery/reads";
+import { projectStatusOf, projectWorkItems, type ProjectWorkItem } from "@ashara/delivery/reads";
 import { callTotalsByTaskAndProvider, taskCallsOf } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
 import { AGENT_CALL_SITE, sessionEvidenceOf, type SessionEvidence } from "@ashara/workplace";
@@ -73,15 +73,6 @@ export interface TaskCall {
 }
 
 /**
- * One work item of the project, whatever it spent: its level, its parent (work_items.parent_id),
- * its work kind (work_items.work_kind), the producer that wrote it and, for a check task, the task
- * its checks decide (task_spec.origin, task_spec.checksFor; NULL when the row records none), and, on
- * an environment-change task, the task it was opened for (work_items.repairs_task_id;
- * NULL when the row records none).
- */
-export type WorkItemEvidence = z.infer<typeof WorkItemRowSchema>;
-
-/**
  * One task's (or, with taskId null, the project's own) llm_calls of one provider. An unmeasured
  * row is one of three: `pendingCalls` admitted and not yet recorded, `lostCalls`
  * admitted by a process that ended before recording them (unmeasured_after_crash), and the rest
@@ -105,7 +96,7 @@ export interface RunEvidence {
   readonly project: z.infer<typeof ProjectRowSchema>;
   readonly tasks: readonly TaskEvidence[];
   readonly calls: readonly CallTotals[];
-  readonly workItems: readonly WorkItemEvidence[];
+  readonly workItems: readonly ProjectWorkItem[];
 }
 
 /**
@@ -120,7 +111,7 @@ export async function readRunEvidence(db: DbHandle, projectId: ProjectId): Promi
   if (projectRow === null) throw new RunReportProjectMissing(projectId);
   const project = ProjectRowSchema.parse(projectRow);
 
-  const workItems = z.array(WorkItemRowSchema).parse(await projectWorkItems(db, projectId));
+  const workItems: readonly ProjectWorkItem[] = z.array(WorkItemRowSchema).parse(await projectWorkItems(db, projectId));
   const sessions = await sessionEvidenceOf(db, workItems.map((item) => item.id));
   const calls = z.array(CallTotalsRowSchema).parse(await callTotalsByTaskAndProvider(db, projectId));
   const taskCalls = z.array(TaskCallRowSchema).parse(await taskCallsOf(db, projectId));

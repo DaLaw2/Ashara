@@ -3,6 +3,7 @@ import { z } from "zod";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 import { insertedRow, type DbHandle } from "@ashara/db";
 import { environmentBuilds } from "@ashara/db/schema/execution-infra";
+import type { FailedEnvironmentBuild, SucceededEnvironmentBuild } from "./environment-build.js";
 
 interface EnvironmentBuildColumns {
   readonly projectId: ProjectId;
@@ -12,9 +13,6 @@ interface EnvironmentBuildColumns {
   readonly network: string;
   readonly logDigest: string;
 }
-
-type NewSucceededEnvironmentBuild = EnvironmentBuildColumns & { readonly imageId: string };
-type NewFailedEnvironmentBuild = EnvironmentBuildColumns & { readonly error: string };
 
 type RecordBase = EnvironmentBuildColumns & { readonly id: string; readonly createdAt: Date };
 type SucceededEnvironmentBuildRecord = RecordBase & { readonly status: "succeeded"; readonly imageId: string; readonly error: null };
@@ -76,7 +74,7 @@ export class EnvironmentBuildRepository {
   }
 
   /** The one succeeded build of (project, version): a rebuild of the same version replaces it. */
-  async recordSucceeded(build: NewSucceededEnvironmentBuild): Promise<EnvironmentBuildRecord> {
+  async recordSucceeded(build: SucceededEnvironmentBuild): Promise<EnvironmentBuildRecord> {
     const columns = {
       commit: build.commit,
       imageRef: build.imageRef,
@@ -96,7 +94,7 @@ export class EnvironmentBuildRepository {
     return toRecord(insertedRow(rows, "environment_builds", `record the succeeded build of version ${build.version}`));
   }
 
-  async recordFailed(build: NewFailedEnvironmentBuild): Promise<EnvironmentBuildRecord> {
+  async recordFailed(build: FailedEnvironmentBuild): Promise<EnvironmentBuildRecord> {
     const rows = await this.db
       .insert(environmentBuilds)
       .values({

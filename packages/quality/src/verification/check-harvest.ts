@@ -2,7 +2,7 @@ import { buildContextPaths } from "@ashara/execution-infra";
 import type { Logger, WorkItemId } from "@ashara/shared";
 import { parseWorkItemId, wrapError } from "@ashara/shared";
 import { HELD_SET_RULE, outcomeRecord, unheldItems, unheldReason } from "@ashara/workplace";
-import type { Outcome, UnheldEvidence } from "@ashara/workplace";
+import type { DefinedCheck, Outcome, UnheldEvidence } from "@ashara/workplace";
 import { describeProductChange, formatCheckRuns } from "../check-verdict.js";
 import type { CheckRunReport } from "../check-verdict.js";
 import { mainRunBlocked } from "../dispatch-result.js";
@@ -209,7 +209,7 @@ export class CheckHarvest {
     work: CheckAuthoring,
     kept: {
       readonly outcome: Outcome;
-      readonly defined: ReturnType<CheckAuthoring["recorder"]["checks"]>;
+      readonly defined: readonly DefinedCheck[];
       readonly files: Parameters<TaskCheckStore["append"]>[0]["files"];
       readonly set: RedRunSetVerdict;
     },

@@ -25,8 +25,7 @@ const DIGEST = `sha256:${"b".repeat(64)}`;
 const SEED = "c".repeat(64);
 const RUN = "r1";
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let projectId: ProjectId;
 let work: string;
 

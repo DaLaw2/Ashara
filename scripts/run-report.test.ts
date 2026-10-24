@@ -82,8 +82,7 @@ const LlmCallRowSchema = z.object({
   estimatedCostUsd: z.number().nullable(),
 });
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let projectId: ProjectId;
 const taskIds: string[] = [];
 

@@ -305,7 +305,7 @@ interface ClaimOutcome {
   readonly unconfirmed: readonly UndecidedItem[];
 }
 
-type SuiteReviewOutcome =
+export type SuiteReviewOutcome =
   | (ReviewedOutcome & { readonly kind: "clean"; readonly claim: ClaimOutcome })
   | (ReviewedOutcome & { readonly kind: "problems"; readonly problems: readonly SuiteReviewProblem[] });
 

@@ -449,9 +449,16 @@ describe("the direct importers", () => {
     ]);
   });
 
+  test("a literal edge counts by the file the compiler resolves it to, a workspace package's entry among them", () => {
+    const layout = workspaceLayout(["packages/shared/package.json", "packages/shared/src/index.ts"], () => undefined);
+    const importer = 'import { describeErrorChain } from "@ashara/shared";\nexport { describeErrorChain };\n';
+    expect(testsImportingDirectly(["packages/x/src/uses.test.ts"], ["packages/shared/src/index.ts"], () => importer, layout)).toEqual(["packages/x/src/uses.test.ts"]);
+    expect(testsImportingDirectly(["packages/x/src/uses.test.ts"], ["packages/shared/src/json.ts"], () => importer, layout)).toEqual([]);
+  });
+
   test("a createRequire result the reader cannot follow fails the selection, never drops the edge", () => {
     const escaped = 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const loaders = [load];\n';
-    expect(() => testsImportingDirectly(["packages/a/src/escaped.test.ts"], [CORE], () => escaped, LAYOUT)).toThrow(/^import-targets: packages\/a\/src\/escaped\.test\.ts:3: "load" holds a createRequire/);
+    expect(() => testsImportingDirectly(["packages/a/src/escaped.test.ts"], [CORE], () => escaped, LAYOUT)).toThrow(/^import-targets: packages\/a\/src\/escaped\.test\.ts:3: a module loader \(or a value that holds one\) is handed to code this reader does not follow/);
   });
 
   test("the head lockfile is read when an edge first needs the workspaces, and not before", () => {

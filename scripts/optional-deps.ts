@@ -31,12 +31,10 @@
  *   members fail: the check errs toward a false failure, never a false pass.
  */
 
-import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { z } from "zod";
-import { JsonParseFailed, parseJson } from "@ashara/shared";
-import { importEdges } from "./import-targets.js";
+import { moduleEdges } from "./import-targets.js";
+import type { ModuleProgram } from "./module-program.js";
 
 const DEPENDENCY_NAME_RE = /(?:Deps|Port|Config)$/;
 
@@ -70,12 +68,10 @@ class OptionalDepsScanError extends Error {
   }
 }
 
-const PackageJsonSchema = z.object({
-  exports: z.record(z.string(), z.string()),
-});
-
 interface ScanOptions {
-  /** The repository root: packages/<pkg>/src and tsconfig.json are read under it. */
+  /** The program over the repository (module-program.ts); every module of packages/<pkg>/src it holds is scanned. */
+  readonly program: ModuleProgram;
+  /** The repository root the program's packages/ is under. */
   readonly root: string;
   /** The supplier entry module, repo-relative. */
   readonly entry: string;
@@ -86,95 +82,18 @@ function isTestModule(file: string): boolean {
   return file.endsWith(".test.ts");
 }
 
-function collectSourceFiles(dir: string): string[] {
-  const results: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name !== "node_modules") results.push(...collectSourceFiles(full));
-    } else if (entry.isFile() && entry.name.endsWith(".ts") && !entry.name.endsWith(".d.ts") && !isTestModule(entry.name)) {
-      results.push(full);
-    }
-  }
-  return results;
-}
-
-/** Workspace packages resolve to this checkout's sources by their package.json exports, never to a linked copy elsewhere. */
-function workspaceResolver(packagesDir: string): (specifier: string) => string | null {
-  const exportsByPackage = new Map<string, Record<string, string>>();
-  return (specifier) => {
-    const match = /^@ashara\/([a-z][a-z0-9-]*)(\/.*)?$/.exec(specifier);
-    if (match === null) return null;
-    const [, pkg, subpath] = match;
-    let exportsMap = exportsByPackage.get(pkg);
-    if (exportsMap === undefined) {
-      const manifestPath = path.join(packagesDir, pkg, "package.json");
-      if (!fs.existsSync(manifestPath)) throw new OptionalDepsScanError(specifier, `${manifestPath} does not exist`);
-      try {
-        exportsMap = parseJson(PackageJsonSchema, fs.readFileSync(manifestPath, "utf-8"), manifestPath).exports;
-      } catch (err) {
-        if (!(err instanceof JsonParseFailed)) throw err;
-        throw new OptionalDepsScanError(manifestPath, `exports is not a map of subpath to file: ${err.message}`);
-      }
-      exportsByPackage.set(pkg, exportsMap);
-    }
-    const target = exportsMap[subpath === undefined ? "." : `.${subpath}`];
-    if (target === undefined) throw new OptionalDepsScanError(specifier, `packages/${pkg}/package.json exports no such subpath`);
-    return path.join(packagesDir, pkg, target);
-  };
-}
-
-function compilerOptionsOf(root: string): ts.CompilerOptions {
-  const tsconfigPath = path.join(root, "tsconfig.json");
-  const read = ts.readConfigFile(tsconfigPath, (p) => ts.sys.readFile(p));
-  if (read.error !== undefined) {
-    throw new OptionalDepsScanError(tsconfigPath, ts.flattenDiagnosticMessageText(read.error.messageText, "\n"));
-  }
-  const parsed = ts.parseJsonConfigFileContent(read.config, ts.sys, root, { noEmit: true }, tsconfigPath);
-  if (parsed.errors.length > 0) {
-    throw new OptionalDepsScanError(tsconfigPath, parsed.errors.map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n")).join("; "));
-  }
-  return { ...parsed.options, noEmit: true, declaration: false, declarationMap: false, sourceMap: false };
-}
-
-function createProgram(root: string, rootNames: readonly string[]): ts.Program {
-  const options = compilerOptionsOf(root);
-  const host = ts.createCompilerHost(options);
-  const resolveWorkspace = workspaceResolver(path.join(root, "packages"));
-  host.resolveModuleNameLiterals = (literals, containingFile) =>
-    literals.map((literal) => {
-      const workspaceFile = resolveWorkspace(literal.text);
-      if (workspaceFile !== null) {
-        return { resolvedModule: { resolvedFileName: workspaceFile, extension: ts.Extension.Ts, isExternalLibraryImport: false } };
-      }
-      return ts.resolveModuleName(literal.text, containingFile, options, host);
-    });
-  return ts.createProgram({ rootNames, options, host });
-}
-
-/**
- * Value-import specifiers of a module, read by import-targets.ts: type-only imports and exports carry
- * no supplier at run time.
- */
-function valueImportSpecifiers(sourceFile: ts.SourceFile): string[] {
-  return importEdges(sourceFile.fileName, sourceFile.text).flatMap((edge) => (edge.typeOnly || edge.target.kind !== "static" ? [] : [edge.target.specifier]));
-}
-
-/** The non-test modules of packages/ that `entry` reaches by value imports, itself included. */
-function reachableModules(program: ts.Program, root: string, entry: string): ts.SourceFile[] {
+/** The non-test modules of packages/ that `entry` reaches by value imports the compiler resolves, itself included. */
+function reachableModules(built: ModuleProgram, root: string, entry: string): ts.SourceFile[] {
   const packagesDir = path.join(root, "packages") + path.sep;
-  const options = program.getCompilerOptions();
-  const host = ts.createCompilerHost(options);
-  const resolveWorkspace = workspaceResolver(path.join(root, "packages"));
-  const entrySource = program.getSourceFile(entry);
+  const entrySource = built.sourceFile(entry);
   if (entrySource === undefined) throw new OptionalDepsScanError(entry, "the supplier entry module is not in the program");
   const seen = new Map<string, ts.SourceFile>([[entrySource.fileName, entrySource]]);
   const queue = [entrySource];
   for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
-    for (const specifier of valueImportSpecifiers(next)) {
-      const resolved = resolveWorkspace(specifier) ?? ts.resolveModuleName(specifier, next.fileName, options, host).resolvedModule?.resolvedFileName;
-      if (resolved === undefined || !path.resolve(resolved).startsWith(packagesDir) || isTestModule(resolved)) continue;
-      const sourceFile = program.getSourceFile(resolved);
+    for (const edge of moduleEdges(built, next.fileName)) {
+      const resolved = edge.typeOnly ? null : edge.resolved;
+      if (resolved === null || !path.resolve(resolved).startsWith(packagesDir) || isTestModule(resolved)) continue;
+      const sourceFile = built.sourceFile(path.resolve(resolved));
       if (sourceFile === undefined || seen.has(sourceFile.fileName)) continue;
       seen.set(sourceFile.fileName, sourceFile);
       queue.push(sourceFile);
@@ -257,27 +176,25 @@ function suppliedDeclarations(sourceFile: ts.SourceFile, checker: ts.TypeChecker
 }
 
 export function findUnsuppliedOptionalMembers(options: ScanOptions): UnsuppliedOptionalMember[] {
-  const { root, allowlist } = options;
-  const packagesDir = path.join(root, "packages");
-  const declarationFiles = fs
-    .readdirSync(packagesDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory() && d.name !== "integration" && fs.existsSync(path.join(packagesDir, d.name, "src")))
-    .flatMap((d) => collectSourceFiles(path.join(packagesDir, d.name, "src")));
+  const { program: built, root, allowlist } = options;
+  const packagesDir = path.join(root, "packages") + path.sep;
+  const integrationDir = path.join(root, "packages", "integration") + path.sep;
+  const declarationFiles = built.files.filter((file) => {
+    const inSrc = file.startsWith(packagesDir) && file.slice(packagesDir.length).split(path.sep)[1] === "src";
+    return inSrc && !file.startsWith(integrationDir) && !isTestModule(file) && !file.endsWith(".d.ts");
+  });
   const entry = path.join(root, options.entry);
-  if (!fs.existsSync(entry)) throw new OptionalDepsScanError(options.entry, "the supplier entry module does not exist");
-
-  const program = createProgram(root, [...new Set([entry, ...declarationFiles])]);
-  const checker = program.getTypeChecker();
+  const checker = built.checker;
 
   const optional: OptionalMember[] = [];
   for (const file of declarationFiles) {
-    const sourceFile = program.getSourceFile(file);
+    const sourceFile = built.sourceFile(file);
     if (sourceFile === undefined) throw new OptionalDepsScanError(file, "the module is not in the program");
     optional.push(...optionalMembersOf(sourceFile, root));
   }
 
   const supplied = new Set<ts.Declaration>();
-  for (const sourceFile of reachableModules(program, root, entry)) suppliedDeclarations(sourceFile, checker, supplied);
+  for (const sourceFile of reachableModules(built, root, entry)) suppliedDeclarations(sourceFile, checker, supplied);
 
   const key = (file: string, declaration: string, member: string): string => `${file}\0${declaration}\0${member}`;
   const allowed = new Map(allowlist.map((a) => [key(a.file, a.declaration, a.member), a]));

@@ -5,8 +5,8 @@ import type { ErrorEnvelope, Outcome } from "../acl/workplace-acl.js";
 import { InvalidStatusTransition, canTransitionTo } from "../work-item-language/transitions.js";
 import type { WorkItem } from "../domain/index.js";
 import { PlanningService, failWorkItem, takeEvents } from "../domain/index.js";
-import type { FailureVerdict } from "../acl/quality-acl.js";
-import type { DispatchSteps, TaskRefusal, TaskResult } from "../types.js";
+import type { ExecutionResult, FailureVerdict } from "../acl/quality-acl.js";
+import type { TaskRefusal, TaskResult } from "../types.js";
 import { blockedResult, completedResult, failedResult } from "../types.js";
 import { chargeInfrastructureFault } from "../infrastructure-fault.js";
 import { publishBestEffort } from "./audit-events.js";
@@ -30,7 +30,6 @@ import {
 import type { ExecutionRoutingDeps } from "./routing-deps.js";
 
 /** What a dispatch returned. */
-type DispatchResult = Awaited<ReturnType<DispatchSteps["dispatchService"]["execute"]>>;
 
 /** A dispatch's result once routed. */
 export interface RoutedExecution {
@@ -49,12 +48,12 @@ export interface RoutedExecution {
 }
 
 /** A result routed here, with the dispatch's outcome and envelope. */
-function routedHere(executed: Exclude<DispatchResult, { status: "completed" }>, result: TaskResult): RoutedExecution {
+function routedHere(executed: Exclude<ExecutionResult, { status: "completed" }>, result: TaskResult): RoutedExecution {
   return { result, outcome: executed.outcome, errorEnvelope: executed.errorEnvelope, routedHere: true };
 }
 
 /** Routes what a dispatch returned to the item's next status, by the result's kind. */
-export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem, executed: DispatchResult): Promise<RoutedExecution> {
+export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem, executed: ExecutionResult): Promise<RoutedExecution> {
   switch (executed.status) {
     case "environment_change_requested":
     case "checks_stale":
@@ -126,7 +125,7 @@ export async function routeExecution(deps: ExecutionRoutingDeps, task: WorkItem,
 async function routeAsReopened(
   deps: ExecutionRoutingDeps,
   task: WorkItem,
-  executed: Extract<DispatchResult, { status: "environment_change_requested" | "checks_stale" | "disputed" | "suite_review_problems" }>,
+  executed: Extract<ExecutionResult, { status: "environment_change_requested" | "checks_stale" | "disputed" | "suite_review_problems" }>,
 ): Promise<RoutedExecution> {
   switch (executed.status) {
     case "environment_change_requested":
@@ -164,7 +163,7 @@ async function routeAsReopened(
 async function routeAsUnworkable(
   deps: ExecutionRoutingDeps,
   task: WorkItem,
-  executed: Extract<DispatchResult, { status: "environment_undefined" | "owner_unresolved" | "no_wider_model" }>,
+  executed: Extract<ExecutionResult, { status: "environment_undefined" | "owner_unresolved" | "no_wider_model" }>,
 ): Promise<RoutedExecution> {
   switch (executed.status) {
     case "environment_undefined":
@@ -207,7 +206,7 @@ async function routeAsUnworkable(
  * refusal no spend cap made (an unpriced model, an unestimable cost) is a configuration
  * fault a re-dispatch would meet again, so the project is blocked until the owner fixes it.
  */
-async function routeAsRefused(deps: ExecutionRoutingDeps, task: WorkItem, executed: Extract<DispatchResult, { status: "refused" }>): Promise<RoutedExecution> {
+async function routeAsRefused(deps: ExecutionRoutingDeps, task: WorkItem, executed: Extract<ExecutionResult, { status: "refused" }>): Promise<RoutedExecution> {
   const refusal: TaskRefusal = deps.spendCap.refusalOf(executed.refusal) ?? configurationRefusal(task, executed.refusal);
   if (refusal.kind === "task_work") {
     // The task's model requests are spent (the work ledger): no grant raises a
@@ -232,7 +231,7 @@ async function routeAsRefused(deps: ExecutionRoutingDeps, task: WorkItem, execut
   return routedHere(executed, { taskId: task.id, status: "refused", detail: executed.detail, refusal });
 }
 
-async function routeAsCompleted(deps: ExecutionRoutingDeps, task: WorkItem, executed: Extract<DispatchResult, { status: "completed" }>): Promise<RoutedExecution> {
+async function routeAsCompleted(deps: ExecutionRoutingDeps, task: WorkItem, executed: Extract<ExecutionResult, { status: "completed" }>): Promise<RoutedExecution> {
   const delivered = executed.delivered;
   let onMain: { readonly mergeCommit: string; readonly mergeKind: MergeKind; readonly what: string } | null = null;
   if (delivered.kind === "merged" || delivered.kind === "already-delivered") {

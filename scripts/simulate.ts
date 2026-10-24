@@ -253,8 +253,12 @@ async function reportSeed(seed: number, args: Args, base: Base, mode: RunMode): 
 
 /** The worker side of `--jobs`: one seed at a time, as the parent sends them, until it disconnects. */
 function serveSeeds(args: Args, base: Base, mode: RunMode): void {
-  const send = process.send?.bind(process);
-  if (send === undefined) throw new SimulateUsageError("--worker is internal to --jobs: it needs the IPC channel of a parent simulate.ts.");
+  const noChannel = "--worker is internal to --jobs: it needs the IPC channel of a parent simulate.ts.";
+  if (process.send === undefined) throw new SimulateUsageError(noChannel);
+  const send = (message: object): void => {
+    if (process.send === undefined) throw new SimulateUsageError(noChannel);
+    process.send(message);
+  };
   let busy = false;
   process.on("message", (raw: unknown) => {
     const request = SeedRequestSchema.safeParse(raw);

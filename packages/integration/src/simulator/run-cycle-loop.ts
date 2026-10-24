@@ -1,6 +1,5 @@
 import { sql } from "drizzle-orm";
 import { z } from "zod";
-import type { AsharaInstance } from "@ashara/server/compose";
 import { describeErrorChain } from "@ashara/shared";
 import type { CorrectionDraw } from "./correction-draws.js";
 import { sample } from "./coverage.js";
@@ -591,15 +590,20 @@ export class CycleLoop {
     state.trace.push(`cycle ${state.cycles}: halted`);
   }
 
-  private async fullCycle(current: Live, faultsBefore: number, ran: CycleRun): Promise<void> {
-    const { state, world } = this.parts;
+  /** One cycle of `current`, with the state marking a cycle running while it runs. */
+  private async runningCycle(current: Live) {
+    const { state } = this.parts;
     state.cycleRunning = true;
-    let result: Awaited<ReturnType<AsharaInstance["cycles"]["runCycle"]>>;
     try {
-      result = await current.ashara.cycles.runCycle();
+      return await current.ashara.cycles.runCycle();
     } finally {
       state.cycleRunning = false;
     }
+  }
+
+  private async fullCycle(current: Live, faultsBefore: number, ran: CycleRun): Promise<void> {
+    const { state, world } = this.parts;
+    const result = await this.runningCycle(current);
     world.residue.cycleRan(this.unfaulted(current, faultsBefore));
     state.dispatches += result.tasksProcessed;
     ran.processed += result.tasksProcessed;

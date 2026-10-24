@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { moduleProgram } from "./module-program.js";
 import { findUnsuppliedOptionalMembers } from "./optional-deps.js";
 
 const DEPS_MODULE = [
@@ -54,8 +55,12 @@ afterAll(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-const scan = (allowlist: Parameters<typeof findUnsuppliedOptionalMembers>[0]["allowlist"]) =>
-  findUnsuppliedOptionalMembers({ root, entry: "packages/server/src/index.ts", allowlist }).map((f) => [f.declaration, f.member, f.line]);
+const MODULES = ["packages/a/src/index.ts", "packages/a/src/deps.ts", "packages/a/src/unused.ts", "packages/a/src/deps.test.ts", "packages/server/src/index.ts"];
+
+const scan = (allowlist: Parameters<typeof findUnsuppliedOptionalMembers>[0]["allowlist"]) => {
+  const program = moduleProgram(root, new Map(MODULES.map((file) => [path.join(root, file), fs.readFileSync(path.join(root, file), "utf-8")])));
+  return findUnsuppliedOptionalMembers({ program, root, entry: "packages/server/src/index.ts", allowlist }).map((f) => [f.declaration, f.member, f.line]);
+};
 
 describe("findUnsuppliedOptionalMembers", () => {
   test("a planted optional member no reached module supplies fails; every supply shape the entry uses counts", () => {

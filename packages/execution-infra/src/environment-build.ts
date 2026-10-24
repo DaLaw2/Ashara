@@ -44,13 +44,13 @@ interface EnvironmentBuildIdentity {
   readonly network: string;
 }
 
-interface SucceededEnvironmentBuild extends EnvironmentBuildIdentity {
+export interface SucceededEnvironmentBuild extends EnvironmentBuildIdentity {
   readonly imageId: string;
   /** sha256 (hex) of the captured build log. */
   readonly logDigest: string;
 }
 
-interface FailedEnvironmentBuild extends EnvironmentBuildIdentity {
+export interface FailedEnvironmentBuild extends EnvironmentBuildIdentity {
   readonly logDigest: string;
   readonly error: string;
 }

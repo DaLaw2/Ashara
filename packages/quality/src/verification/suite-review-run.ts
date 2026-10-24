@@ -3,7 +3,7 @@ import type { Logger } from "@ashara/shared";
 import { describeErrorChain, wrapError } from "@ashara/shared";
 import { NO_AGENT, environmentBlocked, failedBeforeAgent, thrownBlocked } from "../dispatch-result.js";
 import type { ExecutionEventSink, ExecutionResult, VerifiedTask } from "../dispatch-result.js";
-import type { SuiteReviewing } from "../suite-review.js";
+import type { SuiteReviewOutcome, SuiteReviewing } from "../suite-review.js";
 
 /** The PreCallRefusal anywhere in the error's cause chain, or null when no model call was refused. */
 function preCallRefusalOf(e: unknown): PreCallRefusal | null {
@@ -24,8 +24,6 @@ export interface SuiteReviewRunDeps {
   readonly logger: Logger;
 }
 
-type ReviewOutcome = Awaited<ReturnType<SuiteReviewing["review"]>>;
-
 /** A review task's dispatch: the suite review run and its outcome read as the dispatch's result. */
 export class SuiteReviewRun {
   private readonly deps: SuiteReviewRunDeps;
@@ -43,7 +41,7 @@ export class SuiteReviewRun {
    * blocks it under that class. Nothing is released on any of them.
    */
   async reviewSuites(task: VerifiedTask, sessionId: string, targetProjectPath: string): Promise<ExecutionResult> {
-    let outcome: ReviewOutcome;
+    let outcome: SuiteReviewOutcome;
     try {
       outcome = await this.deps.suiteReview.review(task, targetProjectPath);
     } catch (e) {
@@ -113,7 +111,7 @@ export class SuiteReviewRun {
   }
 
   /** The review's outcome as the dispatch's result: clean, releasing the plan's implementations, or its problems to route. */
-  private reviewed(task: VerifiedTask, sessionId: string, outcome: ReviewOutcome): ExecutionResult {
+  private reviewed(task: VerifiedTask, sessionId: string, outcome: SuiteReviewOutcome): ExecutionResult {
     const { eventSink } = this.deps;
     const setAside = outcome.setAside.length === 0 ? "" : `; set aside the abandoned check task(s) ${outcome.setAside.join(", ")}`;
     // A rejection the second review did not reach is released; both judgements are recorded whole

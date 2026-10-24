@@ -9,22 +9,14 @@
 
 import ts from "typescript";
 import type { LintContext, Violation } from "./lint.js";
-import { functionName, productionFiles } from "./production-source.js";
+import { functionName, productionFiles, type AllowedFunction } from "./production-source.js";
 
 const POSITIONAL_PARAMS = "positional-params";
 const MAX_POSITIONAL = 5;
 
-interface AllowedSite {
-  /** Root-relative, `/`-separated. */
-  readonly file: string;
-  /** The function's name, `<Owner>.<method>`, or `constructor of <Class>`. */
-  readonly name: string;
-  readonly reason: string;
-}
-
 const ERROR_CONTEXT = "a typed error's constructor: each parameter is a field of its structured context, read back by name off the error";
 
-const POSITIONAL_ALLOWED: readonly AllowedSite[] = [
+const POSITIONAL_ALLOWED: readonly AllowedFunction[] = [
   { file: "packages/evaluation/src/trust-ledger.ts", name: "constructor of MappingDigestMismatch", reason: ERROR_CONTEXT },
   { file: "packages/execution-infra/src/checkout-lock.ts", name: "constructor of CheckoutHolderOverran", reason: ERROR_CONTEXT },
   { file: "packages/execution-infra/src/errors.ts", name: "constructor of CellExecFailed", reason: ERROR_CONTEXT },
@@ -62,7 +54,7 @@ function parameterLists(file: string, source: string): ParameterList[] {
 
 export function run(context: LintContext): Violation[] {
   const violations: Violation[] = [];
-  const used = new Set<AllowedSite>();
+  const used = new Set<AllowedFunction>();
   const files = productionFiles(context);
   for (const [file, source] of files) {
     for (const list of parameterLists(file, source)) {

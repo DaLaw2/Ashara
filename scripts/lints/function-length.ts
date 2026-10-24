@@ -14,21 +14,13 @@
 
 import ts from "typescript";
 import type { LintContext, Violation } from "./lint.js";
-import { functionName, productionFiles } from "./production-source.js";
+import { functionName, productionFiles, type AllowedFunction } from "./production-source.js";
 
 const FUNCTION_LENGTH = "function-length";
 const FUNCTION_LINE_BOUND = 120;
 const INTEGRATION = "packages/integration/";
 
-interface LongFunctionAllowed {
-  /** Root-relative, `/`-separated. */
-  readonly file: string;
-  /** The function's name as functionName reports it. */
-  readonly name: string;
-  readonly reason: string;
-}
-
-const LONG_FUNCTIONS_ALLOWED: readonly LongFunctionAllowed[] = [];
+const LONG_FUNCTIONS_ALLOWED: readonly AllowedFunction[] = [];
 
 /** One function-like declaration with a body, and the lines it spans. */
 interface FunctionSpan {
@@ -62,9 +54,9 @@ function packageOf(file: string): string {
  * The functions of `context` past the bound that `allowed` does not name, and every entry of `allowed`
  * with no reason or naming no function past the bound.
  */
-export function longFunctions(context: LintContext, allowed: readonly LongFunctionAllowed[]): Violation[] {
+export function longFunctions(context: LintContext, allowed: readonly AllowedFunction[]): Violation[] {
   const violations: Violation[] = [];
-  const used = new Set<LongFunctionAllowed>();
+  const used = new Set<AllowedFunction>();
   const files = productionFiles(context);
   for (const [file, source] of files) {
     for (const span of functionSpans(file, source)) {

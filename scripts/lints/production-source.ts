@@ -40,6 +40,15 @@ export function functionName(fn: ts.SignatureDeclaration, sf: ts.SourceFile): st
   return boundName(fn, sf) ?? `<${ts.SyntaxKind[fn.kind]}>`;
 }
 
+/** An allowlist entry of a lint over function-like declarations: the function, and why it may stay as it is. */
+export interface AllowedFunction {
+  /** Root-relative, `/`-separated. */
+  readonly file: string;
+  /** The function's name as functionName reports it: `<name>`, `<Owner>.<method>` or `constructor of <Class>`. */
+  readonly name: string;
+  readonly reason: string;
+}
+
 /** Production source: a test or a declaration file is left out. */
 function isProduction(relative: string): boolean {
   return !relative.endsWith(".test.ts") && !relative.endsWith(".d.ts");

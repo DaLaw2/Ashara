@@ -17,12 +17,12 @@ export function run(context: LintContext): Violation[] {
   }
   const readModule = (specifier: string, fromFile: string): string | null => {
     if (!specifier.startsWith("./") && !specifier.startsWith("../")) return null;
-    const target = path.resolve(path.dirname(path.join(dir, fromFile)), specifier.replace(/\.js$/, ".ts"));
+    const target = path.resolve(path.dirname(path.resolve(dir, fromFile)), specifier.replace(/\.js$/, ".ts"));
     return fs.existsSync(target) ? fs.readFileSync(target, "utf-8") : null;
   };
   return files.flatMap((name) =>
-    findRunBudgetFindings(fs.readFileSync(path.join(dir, name), "utf-8"), name, readModule).map((finding) => ({
-      file: path.relative(root, path.join(dir, finding.file)).split(path.sep).join("/"),
+    findRunBudgetFindings(fs.readFileSync(path.join(dir, name), "utf-8"), path.join(dir, name), readModule).map((finding) => ({
+      file: path.relative(root, path.resolve(dir, finding.file)).split(path.sep).join("/"),
       line: finding.line,
       fromPkg: "integration",
       specifier: SIMULATOR_RUN_BUDGET,

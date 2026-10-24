@@ -51,7 +51,7 @@ export interface CostedTurnResult extends TurnResult {
 }
 
 /** One single-step call per agent turn, admitted and recorded by Finance. */
-interface CostedTurnLlm {
+export interface CostedTurnLlm {
   generateTurn(request: TurnRequest): Promise<CostedTurnResult>;
 }
 

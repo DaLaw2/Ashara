@@ -5,6 +5,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { moduleProgram, type ModuleProgram } from "../module-program.js";
 import { parseRules } from "./rules.js";
 import type { BoundaryRules, PackageRule } from "./rules.js";
 import { collectTsFiles } from "./source-files.js";
@@ -101,4 +102,23 @@ export function loadLintContext(root: string): LintContext {
   });
 
   return { root, packagesDir, rulesRelative, toml, rules, packageDirs, packages };
+}
+
+const contextPrograms = new WeakMap<LintContext, ModuleProgram>();
+
+/**
+ * The one program the gate's lints read edges and types from: every scanned file of every package,
+ * and every .ts file of the root's scripts/, built once per context. Over a checkout as it stands on
+ * disk these are its sourceTexts, so a reader that asks for one of its files is served this program.
+ */
+export function contextProgram(context: LintContext): ModuleProgram {
+  const kept = contextPrograms.get(context);
+  if (kept !== undefined) return kept;
+  const texts = new Map<string, string>();
+  for (const pkg of context.packages) for (const [filePath, text] of pkg.contents) texts.set(filePath, text);
+  const scriptsDir = path.join(context.root, "scripts");
+  if (fs.existsSync(scriptsDir)) for (const filePath of collectTsFiles(scriptsDir)) texts.set(filePath, fs.readFileSync(filePath, "utf-8"));
+  const built = moduleProgram(context.root, texts);
+  contextPrograms.set(context, built);
+  return built;
 }

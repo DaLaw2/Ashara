@@ -6,6 +6,7 @@ import type { ContractDraft, StoredContract, StoredGuarantee, VisionExclusion } 
 import type { AmendOp, ContractOp } from "./vision-language/contract-op.js";
 import { basisOf } from "./vision-language/index.js";
 import type { InterfaceEntry, VisionGuarantee } from "./vision-language/index.js";
+import type { StoredVision } from "./vision-language/stored-vision.js";
 import { AssumptionKindSchema } from "./vision-language/vision-assumption.js";
 import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeSide } from "./vision-language/vision-assumption.js";
 
@@ -14,20 +15,7 @@ import type { AssumptionDisclosure, AssumptionKind, AssumptionStanding, ScopeSid
 // and the team's stack choice each append the next version. Every other context reads a version only through
 // readVisionVersion, the published reader, never the stored jsonb.
 
-/** A vision version as vision_documents stores it, its jsonb unread. */
-export interface StoredVision {
-  readonly projectId: string;
-  readonly version: number;
-  readonly visionText: string;
-  readonly summary: string;
-  readonly scopeBoundaries: unknown;
-  readonly inferences: unknown;
-  readonly openQuestions: unknown;
-  readonly contractForm: unknown;
-  readonly interface: unknown;
-  readonly guarantees: unknown;
-  readonly exclusions: unknown;
-}
+export type { StoredVision };
 
 /** A stored vision version that does not read as a vision: the project's own record, which no retry changes. */
 export class VisionUnreadable extends Error {
@@ -344,6 +332,9 @@ export interface VisionAppend {
   readonly changeReason: string;
 }
 
+/** A next version that appends one assumption, and the key it is appended under. */
+export type AssumptionAppend = VisionAppend & { readonly key: string };
+
 /**
  * Behaviour a plan adds that no item of the contract states, as the vision records it: what the
  * product does, the guarantees whose work rests on it, and why the team adopted it.
@@ -507,7 +498,7 @@ export class Vision {
     /** The keys of the guarantees it underpins; each must be one this version holds. */
     readonly underpins: readonly string[];
     readonly changeReason: (key: string) => string;
-  }): VisionAppend & { readonly key: string } {
+  }): AssumptionAppend {
     const records = this.keyedRecords();
     const [key] = this.freeKeys(1);
     const appended: AssumptionRecord = {
@@ -590,7 +581,7 @@ export class Vision {
   appendAsked(
     assumption: Parameters<Vision["appendInferred"]>[0],
     question: { readonly messageId: string; readonly text: string },
-  ): VisionAppend & { readonly key: string } {
+  ): AssumptionAppend {
     const appended = this.appendInferred(assumption);
     return {
       ...appended,

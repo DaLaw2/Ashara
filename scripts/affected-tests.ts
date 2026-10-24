@@ -11,8 +11,9 @@
  * Bound: a selection (the whole suite included) of more test files than the cap (--cap, default
  * DEFAULT_SELECTION_CONFIG) runs only the direct tests of the changed files: a changed test file, the
  * test file a changed snapshot belongs to, the colocated `<name>.test.ts` of a changed module, and
- * the test files whose own import edges may load a changed module (an import() or require() whose
- * target no literal spells counts by its template prefix, or else by its workspace). One line says the
+ * the test files whose own import edges may load a changed module (a literal target by the file the
+ * compiler resolves it to; an import() or require() whose target no literal spells by its template
+ * prefix, or else by its workspace). One line says the
  * selection exceeds the cap and how many files were skipped, or that none was; the merge lane's
  * full suite runs the skipped ones. The cap never
  * trims what a dependency or toolchain change selects: those tests run whatever their number, and
@@ -83,7 +84,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeErrorChain } from "@ashara/shared";
-import { importTargets, type ImportTarget } from "./import-targets.js";
+import { importReader, type ImportEdge } from "./import-targets.js";
+import { forgetPrograms } from "./module-program.js";
 import { lockfileImpact, manifestImpact, parseLockfile, type DependencyImpact, type Lockfile } from "./lockfile-impact.js";
 
 class AffectedTestsError extends Error {
@@ -391,6 +393,13 @@ interface DependencySelection {
   readonly reasons: string[];
 }
 
+/** The files of `texts` whose text was read, with it. */
+function readableTexts(texts: ReadonlyMap<string, string | undefined>): Map<string, string> {
+  const read = new Map<string, string>();
+  for (const [file, text] of texts) if (text !== undefined) read.set(file, text);
+  return read;
+}
+
 /** Every test a dependency change reaches, and why; see the header's dependency rule. */
 async function dependencyTests(impacts: readonly DependencyImpact[], sources: SelectionSources): Promise<DependencySelection> {
   const required = new Set<string>();
@@ -418,13 +427,13 @@ async function dependencyTests(impacts: readonly DependencyImpact[], sources: Se
     };
     const readable = sources.files.filter((file) => allTests.has(file) || GRAPH_MODULE_RE.test(file));
     const texts = sources.readRevisions(readable, "head");
+    const edgesOf = importReader(readableTexts(texts));
     for (const file of readable) {
-      const text = texts.get(file);
-      if (text === undefined) {
+      if (texts.get(file) === undefined) {
         takeOwningWorkspace(file, "its text cannot be read to see what it imports");
         continue;
       }
-      for (const target of importTargets(file, text)) {
+      for (const { target } of edgesOf(file)) {
         if (target.kind === "computed") {
           takeOwningWorkspace(file, "an import whose target is computed may load any package");
           continue;
@@ -666,14 +675,6 @@ export async function repositorySources(root: string, revisions: Revisions): Pro
   };
 }
 
-/** The repo-relative files a relative import specifier written in `importer` may resolve to. */
-function specifierTargets(importer: string, specifier: string): string[] {
-  if (!specifier.startsWith(".")) return [];
-  const joined = path.posix.normalize(path.posix.join(path.posix.dirname(importer), specifier));
-  const stem = joined.replace(/\.(js|mjs|ts)$/, "");
-  return [joined, `${stem}.ts`, `${stem}.mjs`, `${stem}.js`, `${joined}/index.ts`];
-}
-
 /**
  * Where the repository's modules live, for an import edge whose target is not spelled whole.
  * @testseam affected-tests.test.ts exercises it without running the CLI
@@ -715,17 +716,16 @@ function workspaceDirsOf(text: string | undefined): ReadonlyMap<string, string> 
 }
 
 /**
- * Whether an import edge written in `importer` may load one of `modules`. A literal resolves to its
- * files; a template whose prefix is relative may load every module whose path begins where the
+ * Whether an import edge written in `importer` may load one of `modules`. A literal loads the file
+ * the compiler resolves it to (a workspace package's entry among them), and none when it resolves
+ * to none; a template whose prefix is relative may load every module whose path begins where the
  * prefix resolves, and one whose prefix names a workspace package may load every module of that
  * workspace; a built-in prefix loads none; any other target, computed or unbounded, may load every
  * module of the importer's own workspace.
  */
-function edgeMayLoad(importer: string, target: ImportTarget, modules: readonly string[], layout: WorkspaceLayout): boolean {
-  if (target.kind === "static") {
-    const targets = new Set(specifierTargets(importer, target.specifier));
-    return modules.some((m) => targets.has(m));
-  }
+function edgeMayLoad(importer: string, edge: ImportEdge, modules: readonly string[], layout: WorkspaceLayout): boolean {
+  const target = edge.target;
+  if (target.kind === "static") return edge.resolved !== null && modules.some((m) => path.resolve(m) === edge.resolved);
   if (target.kind === "template") {
     if (target.prefix.startsWith("node:")) return false;
     const bound = templateTarget(target.prefix);
@@ -746,15 +746,20 @@ function edgeMayLoad(importer: string, target: ImportTarget, modules: readonly s
 
 /**
  * The tests among `allTests` whose own import edges (their text read by `read`) may load any of
- * `modules`; see edgeMayLoad for an edge whose target is not spelled whole.
+ * `modules`, as the compiler resolves each specifier; see edgeMayLoad for an edge whose target is
+ * not spelled whole. A changed module the tree no longer holds is resolved as an empty module, so a
+ * test that still names it is among them.
  * @testseam affected-tests.test.ts exercises it without running the CLI
  */
 export function testsImportingDirectly(allTests: readonly string[], modules: readonly string[], read: (file: string) => string | undefined, layout: WorkspaceLayout): string[] {
+  const texts = new Map(allTests.map((test) => [test, read(test)]));
+  const program = readableTexts(texts);
+  for (const module of modules) if (!program.has(module) && !fs.existsSync(path.resolve(module))) program.set(module, "export {};\n");
+  const edgesOf = importReader(program);
   return allTests.filter((test) => {
-    const text = read(test);
     // A test whose text cannot be read may import any of them, so it stays among the direct tests.
-    if (text === undefined) return true;
-    return importTargets(test, text).some((target) => edgeMayLoad(test, target, modules, layout));
+    if (texts.get(test) === undefined) return true;
+    return edgesOf(test).some((edge) => edgeMayLoad(test, edge, modules, layout));
   });
 }
 
@@ -821,6 +826,7 @@ async function main(): Promise<number> {
     selection = await selectTests(changes, sources);
   } finally {
     await sources.close();
+    forgetPrograms();
   }
   console.log(`${changes.length} changed file(s) against ${cli.base}${cli.head === undefined ? " (working tree)" : `..${cli.head}`}`);
   for (const reason of selection.reasons) console.log(`  ${reason}`);

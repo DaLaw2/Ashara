@@ -2,7 +2,7 @@ import { APICallError, type LanguageModelV4CallOptions } from "@ai-sdk/provider"
 import pg from "pg";
 import { z } from "zod";
 import type { PoolFactory } from "@ashara/db";
-import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
+import type { GitRunner, ProcessResult, ProcessRunner } from "@ashara/execution-infra";
 import type { LanguageModelFactory } from "@ashara/model-access";
 import type { Clock } from "@ashara/shared";
 import type { AdmissionLedger } from "./admissions.js";
@@ -621,7 +621,7 @@ export function faultingPodman(context: SeamContext, inner: ProcessRunner): Proc
       label,
       specific === undefined ? [] : [specific],
     );
-    const failed = (exitCode: number, stderr: string): Awaited<ReturnType<ProcessRunner>> => ({
+    const failed = (exitCode: number, stderr: string): ProcessResult => ({
       exitCode,
       signal: null,
       stdout: "",

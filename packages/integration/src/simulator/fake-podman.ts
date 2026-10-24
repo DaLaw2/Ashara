@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, posix, sep } from "node:path";
 import { z } from "zod";
-import type { ProcessRunner } from "@ashara/execution-infra";
+import type { ProcessRequest, ProcessResult, ProcessRunner } from "@ashara/execution-infra";
 import { JsonParseFailed, parseJson } from "@ashara/shared";
 import { CHECK_MISSING_EXIT } from "@ashara/workplace";
 import {
@@ -20,9 +20,6 @@ import {
 } from "./product.js";
 import type { SimOutcome } from "./product.js";
 import type { Tape } from "./tape.js";
-
-type ProcessRequest = Parameters<ProcessRunner>[0];
-type ProcessResult = Awaited<ReturnType<ProcessRunner>>;
 
 /** The cell's mount point of its tree: the podman contract of execution-infra's substrate. */
 const WORKSPACE = "/workspace";

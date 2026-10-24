@@ -20,7 +20,7 @@ export type { BlockReportStore, LiaisonBlockReports } from "./block-report.js";
 export { BurnWarnings } from "./burn-warning.js";
 export type { LiaisonBurnWarnings } from "./burn-warning.js";
 export { TerminalReports } from "./terminal-report.js";
-export type { LiaisonTerminalReports, TerminalReportStore } from "./terminal-report.js";
+export type { DueTerminal, LiaisonTerminalReports, TerminalReportStore } from "./terminal-report.js";
 export { TERMINAL_KINDS } from "./predicates.js";
 export type { TerminalKind } from "./predicates.js";
 export { TerminalMessage } from "./terminal-report.js";

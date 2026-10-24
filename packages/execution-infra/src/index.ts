@@ -62,7 +62,7 @@ export {
 export type { EnvironmentCheckScope } from "./checkout-cell.js";
 export { cellInstanceFor, reconcileCellsAtStartup, releaseHeldCells, substrateProbe, teardownCellsAtShutdown } from "./cells.js";
 export { elidedOutput, spawnProcess } from "./process-runner.js";
-export type { ProcessRunner } from "./process-runner.js";
+export type { ProcessRequest, ProcessResult, ProcessRunner } from "./process-runner.js";
 export {
   buildContextFields,
   buildContextPaths,

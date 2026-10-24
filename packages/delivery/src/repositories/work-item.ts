@@ -10,7 +10,7 @@ import type { FailureVerdict } from "../acl/quality-acl.js";
 import { citesAnyOf } from "./citation.js";
 import { lockProjectRow } from "./project-lock.js";
 
-type WorkItemRow = typeof workItems.$inferSelect;
+export type WorkItemRow = typeof workItems.$inferSelect;
 
 /** An owner was named for a work item that does not exist or already has one. */
 class WorkItemOwnerNotAssignable extends Error {

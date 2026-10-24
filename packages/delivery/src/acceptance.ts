@@ -4,7 +4,7 @@ import { containEach, describeErrorChain } from "@ashara/shared";
 import { acceptanceUncoveredCause, projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { SCAFFOLD_PLACEHOLDER_MARKER } from "./acl/quality-acl.js";
-import type { AcceptanceSweeper, AcceptanceSweepRecord, AcceptanceUncovered, FailedSweepRecord, ReadyProject } from "./acl/quality-acl.js";
+import type { AcceptanceSweep, AcceptanceSweeper, AcceptanceSweepRecord, AcceptanceUncovered, FailedSweepRecord, ReadyProject } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./domain/index.js";
 import type { InterfaceDefect, PlaceholderDefect } from "./domain/index.js";
@@ -136,12 +136,10 @@ class AcceptanceFaultBudgetSpent extends Error {
   }
 }
 
-type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcceptance"]>>;
-
 type Found = { readonly interfaceDefect: InterfaceDefect | null; readonly placeholderDefect: PlaceholderDefect | null };
 
 /** Where a ran sweep found main still holding the scaffold's placeholder refusal, or null when nowhere or not searched. */
-function placeholderDefectOf(sweep: Extract<Sweep, { readonly kind: "ran" }>): PlaceholderDefect | null {
+function placeholderDefectOf(sweep: Extract<AcceptanceSweep, { readonly kind: "ran" }>): PlaceholderDefect | null {
   if (sweep.placeholder.kind === "not-searched") return null;
   const [first, ...rest] = sweep.placeholder.hits;
   return first === undefined ? null : { marker: SCAFFOLD_PLACEHOLDER_MARKER, at: [first, ...rest] };
@@ -183,7 +181,7 @@ async function recordDefect(deps: AcceptanceDeps, record: FailedSweepRecord, fou
  * project on infrastructure and any other fault is a defect given up for a repair; past it the
  * project halts as undeliverable. Every path writes the recorded cause.
  */
-async function routeSweepFault(deps: AcceptanceDeps, projectId: ProjectId, sweep: Extract<Sweep, { readonly kind: "unrunnable" | "faulted" }>): Promise<void> {
+async function routeSweepFault(deps: AcceptanceDeps, projectId: ProjectId, sweep: Extract<AcceptanceSweep, { readonly kind: "unrunnable" | "faulted" }>): Promise<void> {
   const faults = await deps.acceptance.recordSweepFault(projectId);
   if (faults > INFRASTRUCTURE_FAULT_BUDGET) {
     const err = new AcceptanceFaultBudgetSpent(projectId, faults, sweep.error);

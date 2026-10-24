@@ -14,6 +14,7 @@
  */
 
 export type {
+  AcceptanceSweep,
   AcceptanceSweeper,
   AcceptanceSweepRecord,
   AcceptanceUncovered,

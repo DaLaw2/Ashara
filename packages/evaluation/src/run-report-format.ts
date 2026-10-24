@@ -5,14 +5,14 @@
 
 import { z } from "zod";
 import { isCheckOrigin, isEnvironmentChangeOrigin, isGoalTask } from "@ashara/delivery/predicates";
+import type { ProjectWorkItem } from "@ashara/delivery/reads";
 import type { LastTerminalReport } from "@ashara/engagement";
 import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/quality";
+import type { SessionEvidence } from "@ashara/workplace";
 import type { JudgedVerdict, Overall } from "./hidden-verdict.js";
 import type { MappingFile, PacketKey } from "./pool-mapping.js";
 import type { PickRecord } from "./pool-selection.js";
-import type { CallTotals, RunEvidence, TaskCall, WorkItemEvidence } from "./run-evidence.js";
-
-type Session = RunEvidence["tasks"][number]["sessions"][number];
+import type { CallTotals, RunEvidence, TaskCall } from "./run-evidence.js";
 
 interface Totals {
   calls: number;
@@ -88,7 +88,7 @@ function costLine(t: Totals): string {
 }
 
 /** A session without recorded attempt columns is "no attempt recorded", with what its row shows; never "no model call". */
-function sessionLine(index: number, s: Session): string {
+function sessionLine(index: number, s: SessionEvidence): string {
   const head = `    ${index}. session ${s.sessionId} (${s.phase}, ${s.createdAt.toISOString()})`;
   const record = s.attempt;
   switch (record.kind) {
@@ -124,9 +124,9 @@ function sessionLine(index: number, s: Session): string {
  * will be is not in them: the session is in flight, or a crash orphan the startup reconciler has
  * not closed, whose calls then stay tied to none.
  */
-function tieOf(call: TaskCall, sessions: readonly Session[]): "tied" | "open" | "untied" {
+function tieOf(call: TaskCall, sessions: readonly SessionEvidence[]): "tied" | "open" | "untied" {
   const at = call.createdAt.getTime();
-  const within = (s: Session) => s.createdAt.getTime() <= at && at <= s.updatedAt.getTime();
+  const within = (s: SessionEvidence) => s.createdAt.getTime() <= at && at <= s.updatedAt.getTime();
   if (sessions.some((s) => s.attempt.kind === "recorded" && within(s))) return "tied";
   if (sessions.some((s) => s.attempt.kind === "open" && s.createdAt.getTime() <= at)) return "open";
   return "untied";
@@ -245,9 +245,9 @@ function spendText(s: Spend): string {
  * not on record, or one naming no goal task of the project, serves none and says so. Anything else
  * serves no goal task.
  */
-type Served = { readonly kind: "goal"; readonly goal: WorkItemEvidence; readonly as: "own" | "check" | "repair" } | { readonly kind: "none"; readonly why: string };
+type Served = { readonly kind: "goal"; readonly goal: ProjectWorkItem; readonly as: "own" | "check" | "repair" } | { readonly kind: "none"; readonly why: string };
 
-function servedBy(item: WorkItemEvidence, items: ReadonlyMap<string, WorkItemEvidence>): Served {
+function servedBy(item: ProjectWorkItem, items: ReadonlyMap<string, ProjectWorkItem>): Served {
   if (isGoalTask(item)) return { kind: "goal", goal: item, as: "own" };
   if (item.workKind === "check" && isCheckOrigin(item.origin)) {
     if (item.checksFor === null) return { kind: "none", why: "check task with no task_spec.checksFor" };
@@ -266,9 +266,9 @@ function servedBy(item: WorkItemEvidence, items: ReadonlyMap<string, WorkItemEvi
 }
 
 /** The Epic an item sits under by its work_items.parent_id chain, or null when the chain reaches none. */
-function epicOf(item: WorkItemEvidence, items: ReadonlyMap<string, WorkItemEvidence>): WorkItemEvidence | null {
+function epicOf(item: ProjectWorkItem, items: ReadonlyMap<string, ProjectWorkItem>): ProjectWorkItem | null {
   const seen = new Set<string>();
-  let at: WorkItemEvidence | undefined = item;
+  let at: ProjectWorkItem | undefined = item;
   while (at !== undefined && !seen.has(at.id)) {
     if (at.level === "Epic") return at;
     seen.add(at.id);
@@ -278,7 +278,7 @@ function epicOf(item: WorkItemEvidence, items: ReadonlyMap<string, WorkItemEvide
 }
 
 interface GoalSpend {
-  readonly goal: WorkItemEvidence;
+  readonly goal: ProjectWorkItem;
   readonly first: Spend;
   readonly rework: Spend;
   readonly checks: Spend;
@@ -286,9 +286,9 @@ interface GoalSpend {
 }
 
 interface EpicSpend {
-  readonly epic: WorkItemEvidence | null;
+  readonly epic: ProjectWorkItem | null;
   readonly goals: GoalSpend[];
-  readonly unattributed: { readonly item: WorkItemEvidence; readonly why: string; readonly spend: Spend }[];
+  readonly unattributed: { readonly item: ProjectWorkItem; readonly why: string; readonly spend: Spend }[];
   agentCalls: number;
   agentCallsWithInput: number;
   agentInputTokens: number;
@@ -314,9 +314,9 @@ interface CostLedger {
 }
 
 /** Charges each task's calls to the goal task it serves in that goal task's Epic, or to its Epic's unattributed line. */
-function chargeTasks(evidence: RunEvidence, items: ReadonlyMap<string, WorkItemEvidence>): CostLedger {
+function chargeTasks(evidence: RunEvidence, items: ReadonlyMap<string, ProjectWorkItem>): CostLedger {
   const epics = new Map<string | null, EpicSpend>();
-  const epicFor = (epic: WorkItemEvidence | null): EpicSpend => {
+  const epicFor = (epic: ProjectWorkItem | null): EpicSpend => {
     const key = epic === null ? null : epic.id;
     const known = epics.get(key);
     if (known !== undefined) return known;

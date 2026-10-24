@@ -1,13 +1,13 @@
 import type { Database } from "@ashara/db";
 import { BlockReports, TerminalMessage, TerminalReports, terminalTableOf } from "@ashara/engagement";
-import type { BlockReportStore, TerminalKind, TerminalReportStore } from "@ashara/engagement";
+import type { BlockReportStore, DueTerminal, TerminalKind, TerminalReportStore } from "@ashara/engagement";
 import { UnreadSubject, parseProjectId, systemClock } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import { createBlockReportStore } from "@ashara/server/block-report-store";
 import { createTerminalReportStore } from "@ashara/server/terminal-report-store";
 import { sweepTerminalsOf } from "./terminal-sweeps.js";
 
-type Due = Awaited<ReturnType<TerminalReportStore["dueTerminals"]>>[number];
+type Due = DueTerminal | UnreadSubject;
 type ProductInterface = ConstructorParameters<typeof TerminalReports>[1];
 type Listed = Extract<Due, { readonly kind: "delivered" }>;
 /** A delivered report due, as dueDeliveredOf names it: its records and its table, or why its records did not read. */

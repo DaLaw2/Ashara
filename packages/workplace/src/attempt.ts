@@ -1,7 +1,7 @@
 import type { ModelMessage, ToolResultPart } from "ai";
 import type { CellBackend } from "@ashara/execution-infra";
 import { ContextBudgetExceeded, PreCallRefusal, modelCallAbortedOf } from "@ashara/finance";
-import type { ContextualTurnLlm, CostedTurnResult } from "@ashara/finance";
+import type { ContextualTurnLlm, CostedTurnLlm, CostedTurnResult } from "@ashara/finance";
 import { describeErrorChain, serializeError } from "@ashara/shared";
 import type { Clock } from "@ashara/shared";
 import type { Assignment, ResolvedLimits } from "./assignment.js";
@@ -183,7 +183,7 @@ class AttemptLoop {
   private readonly tools: ToolSchemas;
   private readonly startedAt: number;
   private readonly deadline: number;
-  private readonly llm: ReturnType<ContextualTurnLlm["forCall"]>;
+  private readonly llm: CostedTurnLlm;
   private readonly system: string;
   private readonly messages: ModelMessage[];
   private readonly digest: string;

@@ -52,7 +52,19 @@ const StoredVisionSchema = z.strictObject({
 });
 
 /** A vision version as vision_documents stores it, its jsonb unread, as currentStoredVision reads it. */
-export type PublishedStoredVision = z.infer<typeof StoredVisionSchema>;
+export interface StoredVision {
+  readonly projectId: string;
+  readonly version: number;
+  readonly visionText: string;
+  readonly summary: string;
+  readonly scopeBoundaries: unknown;
+  readonly inferences: unknown;
+  readonly openQuestions: unknown;
+  readonly contractForm: unknown;
+  readonly interface: unknown;
+  readonly guarantees: unknown;
+  readonly exclusions: unknown;
+}
 
 /** What currentStoredVision read does not hold together as a stored vision version. */
 class StoredVisionUnreadable extends Error {
@@ -66,7 +78,7 @@ class StoredVisionUnreadable extends Error {
 }
 
 /** Reads what currentStoredVision selected for the project; one that is absent or does not parse throws. */
-export function parseStoredVision(projectId: string, raw: unknown): PublishedStoredVision {
+export function parseStoredVision(projectId: string, raw: unknown): StoredVision {
   const parsed = StoredVisionSchema.safeParse(raw);
   if (!parsed.success) throw new StoredVisionUnreadable(projectId, z.prettifyError(parsed.error));
   return parsed.data;

@@ -8,6 +8,7 @@ import { VisionRepository } from "./repositories/vision.js";
 import type { RevisionRecord } from "./vision-language/contract-op.js";
 import { ASSUMPTION_LABEL } from "./vision-language/vision-assumption.js";
 import { Vision, VisionChangeRefused, VisionUnreadable } from "./vision.js";
+import type { AssumptionAppend } from "./vision.js";
 
 // A decision only the client can make, which a task of the plan cannot go on without, put to the
 // client on the channel intake's questions use: the question is posted, and the vision records what
@@ -117,7 +118,7 @@ export async function askTaskQuestion(db: Database, question: TaskQuestion): Pro
       body: questionBody(question),
       inReplyTo: null,
     });
-    let asked: ReturnType<Vision["appendAsked"]>;
+    let asked: AssumptionAppend;
     try {
       asked = vision.appendAsked(
         {
