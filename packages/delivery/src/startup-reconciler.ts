@@ -18,7 +18,7 @@ import { ORPHANED_SESSION_RESOLVER } from "./acl/workplace-acl.js";
 import { OrphanUnreconciled, releaseMergedTask } from "./orphan-merge.js";
 import type { TargetPathSource } from "./orphan-merge.js";
 import type { MainHoldsNoMerge, MainRead, MainUnreadRead } from "./requeue-on-main.js";
-import { chargeUnreadMain, readMainForMerge, returnToPending } from "./requeue-on-main.js";
+import { chargeUnreadMain, chargeWhileParked, readMainForMerge, returnToPending } from "./requeue-on-main.js";
 import { MERGE_RECORD_BACKOFF_MS } from "./execution/merge-record.js";
 import { releaseBranchesOfSettledTasks } from "./settled-branches.js";
 import type { SettledTargets } from "./settled-branches.js";
@@ -197,7 +197,8 @@ type Settled = "requeued" | "given-up" | "completed" | "blocked" | "moved";
  * could not be read takes the one policy for an unread main (chargeUnreadMain): a refused workspace
  * path, never retried here, halts the project at once; any other failure is counted on the task and
  * halts it only past the budget. An orphan blocked on any other step has the project blocked on it
- * so the operator sees it. A block that cannot be written either throws: the start is refused
+ * so the operator sees it. Either charge is made only while the orphan is still Blocked under the
+ * charge's row lock (chargeWhileParked). A block that cannot be written either throws: the start is refused
  * rather than run with an item InProgress and no attempt alive. The waits between attempts are
  * MERGE_RECORD_BACKOFF_MS's, the one bound every settlement from main takes.
  */
@@ -283,12 +284,13 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
         await chargeUnreadMain(deps, orphan, step, unread);
         return "blocked";
       }
-      const result = await deps.projects.block(orphan.projectId, projectBlockCause(unsettled));
-      deps.logger.error("delivery.project-halted", `project ${orphan.projectId} ${result} on Ashara's own fault: ${unsettled.message}`, {
+      const halted = await chargeWhileParked(deps, orphan, step, (ledger) => ledger.blockProject(orphan.projectId, projectBlockCause(unsettled)));
+      if (halted.kind === "uncharged") return "blocked";
+      deps.logger.error("delivery.project-halted", `project ${orphan.projectId} ${halted.value} on Ashara's own fault: ${unsettled.message}`, {
         taskId: orphan.id,
         projectId: orphan.projectId,
         faultClass: "ashara",
-        result,
+        result: halted.value,
       }, unsettled);
     } catch (error) {
       // eslint-disable-next-line ashara/catch-continue -- best effort: the orphan is already Blocked with its own exit, which the loop takes each cycle while the project runs

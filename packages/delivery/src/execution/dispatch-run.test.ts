@@ -17,7 +17,7 @@ import { toRecordedOutcome } from "../acl/workplace-acl.js";
 import type { Outcome } from "../acl/workplace-acl.js";
 import { DEFAULT_CONFIG, withOverrides } from "../types.js";
 import type { CoreLoopDeps, CoreLoopOverrides, DispatchSteps, LoopCore } from "../types.js";
-import { inertCoreLoopDeps, inertWorkItemRepo } from "../testing.js";
+import { inertCoreLoopDeps, inertWorkItemRepo, itemLockOver } from "../testing.js";
 import { handleProcessingError, processTask } from "./dispatch-run.js";
 import { GiveUpMisrouted } from "./give-up-causes.js";
 import type { GiveUpCause } from "./give-up-causes.js";
@@ -383,6 +383,13 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       },
       incrementDispatchCount: async () => 1,
       recordInfrastructureFault: async () => ++faults,
+      withItemLocked: itemLockOver(async () => copy(row), {
+        recordInfrastructureFault: (id) => workItemRepo.recordInfrastructureFault(id),
+        blockProject: async (_projectId, cause) => {
+          halts.push(cause);
+          return "blocked";
+        },
+      }),
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       async saveRefunded(item, expectedPreviousStatus) {

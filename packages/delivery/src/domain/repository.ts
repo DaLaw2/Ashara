@@ -21,6 +21,17 @@ export interface ActiveProjects {
 }
 
 /**
+ * The writes a charge for a task's unread main makes, each in the transaction that holds the task's
+ * row locked: they commit with that lock's read of the task, or not at all.
+ */
+export interface LockedChargeLedger {
+  /** Counts one infrastructure fault on the item and returns the count after it; throws when it does not exist. */
+  recordInfrastructureFault(id: WorkItemId): Promise<number>;
+  /** Blocks an active project and records why; a project already blocked keeps its first cause. */
+  blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
+}
+
+/**
  * Reads of work items are per project: a row whose jsonb does not parse throws
  * WorkItemRowCorrupt naming its project, and fails that project's read only.
  */
@@ -118,4 +129,11 @@ export interface WorkItemRepository {
    * an item persisted without its declared edges.
    */
   withTransaction<T>(fn: (repo: WorkItemRepository) => Promise<T>): Promise<T>;
+  /**
+   * Runs `fn` in one transaction that holds the item's project row and then the item's row locked,
+   * handing it the item as read under that lock (null when it is gone) and the ledger whose writes
+   * commit with it. An owner's transition of the item either commits before the read, which sees
+   * it, or waits for this transaction's commit.
+   */
+  withItemLocked<T>(item: Pick<WorkItem, "id" | "projectId">, fn: (locked: WorkItem | null, ledger: LockedChargeLedger) => Promise<T>): Promise<T>;
 }

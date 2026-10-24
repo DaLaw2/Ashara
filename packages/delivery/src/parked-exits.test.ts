@@ -13,7 +13,7 @@ import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
-import { inertWorkItemRepo } from "./testing.js";
+import { inertWorkItemRepo, itemLockOver } from "./testing.js";
 
 const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test");
 
@@ -36,6 +36,14 @@ function blocked(reason: StoredBlockedReason | undefined): WorkItem {
   };
 }
 
+/** The read of a task under its charge's row lock failed. */
+class LockedReadFailed extends Error {
+  constructor(readonly taskId: string) {
+    super(`the row of task ${taskId} could not be read under its lock`);
+    this.name = "LockedReadFailed";
+  }
+}
+
 /** The client's side of a held task's question: whether it can be asked, and whether its answer is read. */
 interface ClientSide {
   readonly askable: boolean;
@@ -50,19 +58,29 @@ function run(
   client: ClientSide = { askable: true, answered: true },
   faultsBefore = 0,
   duringRead: () => void = () => undefined,
+  lockedRead?: WorkItemRepository["findById"],
 ) {
   let faults = faultsBefore;
+  const logger = recordingLogger();
+  // Every fault escapes the step but a locked read's that a test throws, which the step contains.
+  const containment = memoryStepContainment((error) => !(error instanceof LockedReadFailed));
   const saves: Array<{ id: string; prev: WorkItemStatus; status: WorkItemStatus; reason: unknown }> = [];
   const published: Array<Pick<DomainEvent, "eventType">> = [];
   const asked: string[] = [];
   const posted = new Set<string>();
   const blocks: Array<{ readonly projectId: string; readonly cause: ProjectBlockCause }> = [];
+  const findById: WorkItemRepository["findById"] = async (id) => {
+    const found = items.find((i) => i.id === id);
+    return found === undefined ? null : { ...found, events: [] };
+  };
+  const block = async (projectId: string, cause: ProjectBlockCause): Promise<"blocked"> => {
+    blocks.push({ projectId, cause });
+    return "blocked";
+  };
   const workItemRepo: WorkItemRepository = inertWorkItemRepo({
     findByProjectAndStatus: async (_projectId, status) => items.filter((i) => i.status === status).map((i) => ({ ...i, events: [] })),
-    findById: async (id) => {
-      const found = items.find((i) => i.id === id);
-      return found === undefined ? null : { ...found, events: [] };
-    },
+    findById,
+    withItemLocked: itemLockOver(lockedRead ?? findById, { recordInfrastructureFault: async () => ++faults, blockProject: block }),
     listByProject: async () => items.map((i) => ({ ...i, events: [] })),
     listDependenciesByProject: async () => [],
     save: async (item, prev) => {
@@ -71,7 +89,6 @@ function run(
     },
     saveRefundedOverflow: async () => 0,
     recordCrashOrphan: async () => 1,
-    recordInfrastructureFault: async () => ++faults,
     recordMergeCommit,
   });
   const released = releaseClearedBlocks({
@@ -83,10 +100,7 @@ function run(
         duringRead();
         return { workspacePath };
       },
-      block: async (projectId, cause) => {
-        blocks.push({ projectId, cause });
-        return "blocked";
-      },
+      block,
     },
     clientQuestions: {
       ask: async (question) => {
@@ -99,10 +113,10 @@ function run(
       answered: async () => client.answered,
     },
     workdirBase: tmpdir(),
-    containment: memoryStepContainment(() => true),
-    logger: recordingLogger(),
+    containment,
+    logger,
   });
-  return { released, saves, published, asked, blocks, faults: () => faults };
+  return { released, saves, published, asked, blocks, faults: () => faults, logger, containment };
 }
 
 const repos: string[] = [];
@@ -361,6 +375,37 @@ describe("orphan_unreconciled reads main again before it leaves Blocked", () => 
     expect(saves).toEqual([]);
     expect(faults()).toBe(3);
     expect(blocks).toEqual([]);
+  });
+
+  test("main unread and the task gone under the charge's lock: warned of, neither counted on its fault budget nor its project halted", async () => {
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    repos.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const item = blocked(unreconciled);
+    const { released, saves, blocks, faults, logger } = run([item], false, notExercised("recordMergeCommit"), unreadable, undefined, 0, undefined, async () => null);
+
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(faults()).toBe(0);
+    expect(blocks).toEqual([]);
+    expect(logger.records).toContainEqual(expect.objectContaining({ level: "warn", event: "delivery.item-vanished", fields: expect.objectContaining({ taskId: item.id }) }));
+  });
+
+  test("main unread and the read under the charge's lock failing: the fault is the project's, contained to it, and nothing is charged", async () => {
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    repos.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const item = blocked(unreconciled);
+    const lockedRead = async (id: WorkItem["id"]): Promise<never> => {
+      throw new LockedReadFailed(id);
+    };
+    const { released, saves, blocks, faults, containment } = run([item], false, notExercised("recordMergeCommit"), unreadable, undefined, 0, undefined, lockedRead);
+
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(faults()).toBe(0);
+    expect(blocks).toEqual([]);
+    expect(containment.recorded.get(`parked-exits/${PROJECT}`)).toMatchObject({ faults: 1, error: expect.stringContaining(`the row of task ${item.id} could not be read under its lock`) });
   });
 
   test("a refused workspace path: the project halts at once, nothing counted, no retry can clear it", async () => {

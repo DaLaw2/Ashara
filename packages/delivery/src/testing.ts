@@ -5,7 +5,7 @@
  */
 
 import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
-import type { WorkItemRepository } from "./domain/index.js";
+import type { LockedChargeLedger, WorkItemRepository } from "./domain/index.js";
 import { concurrentTaskLanes } from "./core-loop.js";
 import { DEFAULT_CONFIG, withOverrides } from "./types.js";
 import type { CoreLoopDeps, CoreLoopOverrides, LoopCore } from "./types.js";
@@ -99,8 +99,18 @@ export function inertWorkItemRepo(overrides: Partial<WorkItemRepository> = {}): 
     listDependenciesByProject: notExercised("workItemRepo.listDependenciesByProject"),
     listCorrectionHeld: notExercised("workItemRepo.listCorrectionHeld"),
     withTransaction: notExercised("workItemRepo.withTransaction"),
+    withItemLocked: notExercised("workItemRepo.withItemLocked"),
     ...overrides,
   };
+}
+
+/**
+ * withItemLocked over a unit test's own stand-ins: the item read by `findById`, the charge written
+ * through `ledger`. No lock is held; the interleaving the lock serializes is tested over a database.
+ * @testseam the unit tests of a charge stand its locked transaction in with it; production's is adaptWorkItemRepo's
+ */
+export function itemLockOver(findById: WorkItemRepository["findById"], ledger: LockedChargeLedger): WorkItemRepository["withItemLocked"] {
+  return async (item, fn) => fn(await findById(item.id), ledger);
 }
 
 /**

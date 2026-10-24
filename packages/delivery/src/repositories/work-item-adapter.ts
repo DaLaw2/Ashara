@@ -4,6 +4,7 @@ import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";
 import { parseWorkKind } from "../acl/organization-acl.js";
 import { failureVerdictSchema } from "../acl/quality-acl.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
+import { ProjectHaltRepository } from "./project-halt.js";
 import type { WorkItemRowRepository } from "./work-item.js";
 import type { StoredFailureVerdict, WorkItem, WorkItemRepository } from "../domain/index.js";
 
@@ -158,6 +159,15 @@ export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository
     },
     async withTransaction(fn) {
       return db.withTransaction((txDb) => fn(adaptWorkItemRepo(txDb)));
+    },
+    async withItemLocked(item, fn) {
+      return db.withItemLocked(item.projectId, item.id, (row, txDb, tx) => {
+        const projects = new ProjectHaltRepository(tx);
+        return fn(row === null ? null : rowToWorkItem(row), {
+          recordInfrastructureFault: (id) => txDb.recordInfrastructureFault(id),
+          blockProject: (projectId, cause) => projects.block(projectId, cause),
+        });
+      });
     },
   };
 }

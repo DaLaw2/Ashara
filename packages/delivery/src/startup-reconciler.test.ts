@@ -10,7 +10,7 @@ import { FailureRouter } from "./failure-router.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { MERGE_RECORD_BACKOFF_MS } from "./execution/merge-record.js";
 import { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
-import { inertWorkItemRepo } from "./testing.js";
+import { inertWorkItemRepo, itemLockOver } from "./testing.js";
 
 type StartupReconcilerDeps = Parameters<typeof reconcileWorkItemsOnStartup>[0];
 
@@ -194,10 +194,16 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
     };
     const records: Array<{ readonly commit: string; readonly kind: unknown }> = [];
     const projectBlocks: ProjectBlockCause[] = [];
+    const block = async (_id: string, cause: ProjectBlockCause): Promise<"blocked"> => {
+      projectBlocks.push(cause);
+      return "blocked";
+    };
+    const findById = async (): Promise<WorkItem> => ({ ...row, events: [] });
     const repo: WorkItemRepository = emptyWorkItemRepo({
       projectIdsWithStatus: async (status) => (status === "InProgress" && row.status === "InProgress" ? [PROJECT_ID] : []),
       findByProjectAndStatus: async () => [{ ...row, events: [] }],
-      findById: async () => ({ ...row, events: [] }),
+      findById,
+      withItemLocked: itemLockOver(findById, { recordInfrastructureFault: async () => ++faults, blockProject: block }),
       save: async (item) => {
         if (saveFails(item.status)) throw new Error(`connection lost saving ${item.status}`);
         row = { ...item, events: [] };
@@ -207,17 +213,13 @@ describe("reconcileWorkItemsOnStartup — a crash orphan is settled from main, w
         row = { ...item, events: [] };
       },
       recordMergeCommit: async (_id, commit, kind) => void records.push({ commit, kind }),
-      recordInfrastructureFault: async () => ++faults,
     });
     const logger = recordingLogger();
     const { deps } = buildDeps({
       logger,
       workItemRepo: repo,
       projects: {
-        block: async (_id, cause) => {
-          projectBlocks.push(cause);
-          return "blocked";
-        },
+        block: unusedBlock,
         get: async () => ({ workspacePath }),
         listWithWorkspace: async () => [],
       },

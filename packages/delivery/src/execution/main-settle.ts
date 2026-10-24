@@ -58,8 +58,8 @@ export async function routeAsParked(deps: ExecutionRoutingDeps, taskId: WorkItem
  * record cannot be written); main that cannot be read parks the task orphan_unreconciled, whose
  * exit reads main again each cycle, under the one policy for an unread main (chargeUnreadMain): a
  * transient fault retried within the task's infrastructure fault budget, a refused workspace path
- * halting the project at once. A task that moved before it could be parked (the owner abandoned it)
- * is no longer at work, and nothing is charged for it.
+ * halting the project at once. A task that moved before it could be parked, or before its charge
+ * (the owner abandoned it), is no longer at work, and nothing is charged for it.
  */
 export async function mainHoldsNoMergeOf(deps: ExecutionRoutingDeps, task: WorkItem, why: string): Promise<MainHoldsNoMerge | null> {
   const read = await readMainForMerge(deps, task, MERGE_RECORD_BACKOFF_MS);

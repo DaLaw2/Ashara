@@ -1,7 +1,7 @@
 import { and, eq, asc, desc, inArray, isNotNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { DbHandle } from "@ashara/db";
-import { insertedRow } from "@ashara/db";
+import { insertedRow, projects } from "@ashara/db";
 import { workItems, dependencies } from "@ashara/db/schema/delivery";
 import { parseWorkItemStatus } from "../work-item-language/work-item-status.js";
 import { canTransitionTo, InvalidStatusTransition, WorkItemNotFound } from "../work-item-language/transitions.js";
@@ -77,6 +77,21 @@ export class WorkItemRowRepository {
    */
   async withTransaction<T>(fn: (repo: WorkItemRowRepository) => Promise<T>): Promise<T> {
     return this.db.transaction((tx) => fn(new WorkItemRowRepository(tx)));
+  }
+
+  /**
+   * Runs `fn` in one transaction that holds the project row, then the item's row, locked (FOR
+   * UPDATE), with the item as read under the lock (null when it is gone), a repository and the
+   * handle of that transaction. The project row comes first because a planning write locks it
+   * before the items it writes, and a charge in `fn` may halt the project (its block locks that
+   * row): one order, so neither waits on the other's second lock.
+   */
+  async withItemLocked<T>(projectId: string, id: string, fn: (row: WorkItemRow | null, repo: WorkItemRowRepository, tx: DbHandle) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+      const [row] = await tx.select().from(workItems).where(eq(workItems.id, id)).for("update");
+      return fn(row === undefined ? null : this.validateRow(row), new WorkItemRowRepository(tx), tx);
+    });
   }
 
   async create(item: typeof workItems.$inferInsert) {

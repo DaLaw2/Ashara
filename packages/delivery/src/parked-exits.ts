@@ -148,12 +148,12 @@ async function completeRecordedMerge(deps: ParkedExitDeps, item: WorkItem, merge
  * merge. Found, it is recorded and the task Completed; none, the task goes back to Pending, now that
  * main says nothing of it was merged. Main unreadable leaves it Blocked for the next cycle, never
  * requeued blind, under the one policy for an unread main (chargeUnreadMain), charged only while it
- * is still Blocked after the read (stillParked).
+ * is still Blocked under the charge's row lock.
  */
 async function settleOnMain(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
   const read = await readMainForMerge(deps, item, MERGE_RECORD_BACKOFF_MS);
   if (read.kind === "unread") {
-    if (await stillParked(deps, item)) await chargeUnreadMain(deps, item, "read main for the task's merge before it leaves Blocked", read);
+    await chargeUnreadMain(deps, item, "read main for the task's merge before it leaves Blocked", read);
     return false;
   }
   if (read.kind === "merged") return completeRecordedMerge(deps, item, read.mergeCommit, "merged");
@@ -202,7 +202,7 @@ async function awaitAnswer(deps: ParkedExitDeps, item: WorkItem, held: HeldReaso
   if (!(await deps.clientQuestions.answered(questionId))) return "held";
   const read = await readMainForMerge(deps, item, MERGE_RECORD_BACKOFF_MS);
   if (read.kind === "unread") {
-    if (await stillParked(deps, item)) await chargeUnreadMain(deps, item, `read main for the task's merge once the client's answer to question ${questionId} is read`, read);
+    await chargeUnreadMain(deps, item, `read main for the task's merge once the client's answer to question ${questionId} is read`, read);
     return "main-unread";
   }
   if (read.kind === "merged") return (await completeRecordedMerge(deps, item, read.mergeCommit, "merged")) ? "left" : "held";
@@ -211,25 +211,6 @@ async function awaitAnswer(deps: ParkedExitDeps, item: WorkItem, held: HeldReaso
   deps.logger.info("delivery.client-answered", `the client's answer to question ${questionId} is read; back to Pending`, { taskId: item.id, questionId });
   await publishAll(deps, item.id, takeEvents(item));
   return "left";
-}
-
-/**
- * Whether a task whose main went unread is still Blocked once the read returned: the read waits out
- * its backoff, and a task the owner moved meanwhile (Blocked -> Abandoned) is no longer kept off
- * Pending for it, so its unread main is charged to neither its fault budget nor its project.
- */
-async function stillParked(deps: ParkedExitDeps, item: WorkItem): Promise<boolean> {
-  const now = await deps.workItemRepo.findById(item.id);
-  if (now === null) {
-    deps.logger.warn("delivery.item-vanished", "main unread for its merge, and the task is gone; nothing is charged for it", { taskId: item.id });
-    return false;
-  }
-  if (now.status === "Blocked") return true;
-  deps.logger.info("delivery.main-unread-uncharged", `main unread for its merge, but it moved to ${now.status} during the read; nothing is charged for it`, {
-    taskId: item.id,
-    status: now.status,
-  });
-  return false;
 }
 
 /** The guarantees a task delivers, by key: what a decision it waits on underpins. */
