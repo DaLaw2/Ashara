@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { createFirstPlanStore } from "@ashara/delivery";
 import { ClientAnswers, ClientChanges, ClientMessageRepository, ClientReceipts, TenderIntake, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, ClientChangeStore, ClientReceiptStore, IntakeStore } from "@ashara/engagement";
@@ -37,7 +38,7 @@ const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `verifiable-floor-test-${randomUUID().slice(0, 8)}`;
 const TENDER = "A ledger that keeps every entry the client records. Entries survive a restart.";
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

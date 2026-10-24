@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, runAcceptanceSweeps, WorkItemRowRepository } from "@ashara/delivery";
 import type { AcceptanceStore } from "@ashara/delivery";
 import { createProjectWithTender, VisionRepository } from "@ashara/engagement";
@@ -32,7 +33,7 @@ const MAIN = "c3".repeat(20);
 const TENDER = "A key store. Clients put and get keys. A deleted key is gone.";
 const COMMAND = "sh checks/run.sh";
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 
 const G1: VisionSource = { type: "guarantee", id: "G1", text: "A get returns the value of the last put of its key.", observation: "output", interface: ["I1"], refutedBy: ["a get after a put prints another value"] };

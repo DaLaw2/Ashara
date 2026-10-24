@@ -8,7 +8,7 @@ import type { CheckRunReport } from "../check-verdict.js";
 import { mainRunBlocked } from "../dispatch-result.js";
 import type { CheckAuthoring, ExecutionEventSink, ExecutionResult, VerifiedDispatch } from "../dispatch-result.js";
 import { checkAreaOf, discardCheckWorkdir, harvestCheckFiles, redRunProblem, redRunSetLine, redRunSetVerdict, redRunVerdict, runChecksOnCheckout, setRejected } from "../task-checks.js";
-import type { TaskCheckStore } from "../task-checks.js";
+import type { RedRunSetVerdict, TaskCheckStore } from "../task-checks.js";
 import { HELD_SET_GIVEN_UP, WORK_FAILED } from "../task-verdict.js";
 import type { FailureVerdict } from "../task-verdict.js";
 import { RED_RUN_ROLE } from "./dispatch-cells.js";
@@ -211,7 +211,7 @@ export class CheckHarvest {
       readonly outcome: Outcome;
       readonly defined: ReturnType<CheckAuthoring["recorder"]["checks"]>;
       readonly files: Parameters<TaskCheckStore["append"]>[0]["files"];
-      readonly set: Awaited<ReturnType<typeof redRunSetVerdict>>;
+      readonly set: RedRunSetVerdict;
     },
   ): Promise<ExecutionResult> {
     const { eventSink } = this.deps;

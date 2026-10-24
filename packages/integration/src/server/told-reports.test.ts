@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, MIGRATIONS_DIR, ProjectRepository, createDb, createPgPool, resolveTestDatabaseUrl, runMigrations } from "@ashara/db";
-import type { PoolFactory } from "@ashara/db";
+import type { PoolFactory, Database } from "@ashara/db";
 import { ProjectHaltRepository, endHaltOnStop, listDuePlanRevisionReports } from "@ashara/delivery";
 import {
   ClientMessageRepository,
@@ -33,7 +33,7 @@ import { deliveredMessage, haltMessage } from "./terminal-reports.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const TOLD_MIGRATION = "015_told_reports.sql";
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 
 /** A database handle whose pool this suite ends, so a "restart" is a new pool over the same rows. */
 function connect(url: string): { readonly db: Db; readonly end: () => Promise<void> } {

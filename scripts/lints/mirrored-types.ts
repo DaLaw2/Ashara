@@ -4,22 +4,28 @@
  * name are a violation, and so are two with different names whose members are the same, in one
  * file or in two: at least MIN_MEMBERS of them, each by name, optionality and type, with every
  * named type read as one and `readonly` left out. A copy kept under another name drifts from its
- * original as silently as one kept under the same name. So is an alias `type X = ReturnType<typeof f>`
- * of a function `f` the file imports: the module that exports `f` owns the type of what it returns,
- * and names it for its callers. A pair that is two distinct concepts, or an alias that is no copy,
- * is named in MIRRORED_ALLOWED with its reason; an entry that names no such declaration fails, so
- * the list cannot outlive the declarations it excuses.
+ * original as silently as one kept under the same name. A pair that is two distinct concepts is
+ * named in MIRRORED_ALLOWED with its reason; an entry that names no such declaration fails, so the
+ * list cannot outlive the declarations it excuses.
+ *
+ * So is any type, in a package's production source or in scripts/, written over what a function the
+ * file imports returns: `ReturnType<typeof f>` in an alias or inline in a signature, a field or an
+ * annotation, whether wrapped (`Awaited`, `NonNullable`, `Extract`) or indexed (`[number]`, `["k"]`).
+ * The module that exports `f` owns the type of what it returns, and names it for its callers. A
+ * Node built-in and a global are no module of the repository's to name it in, so they are left out.
  */
 
+import { isBuiltin } from "node:module";
 import ts from "typescript";
 import { importEdges } from "../import-targets.js";
 import type { LintContext, Violation } from "./lint.js";
+import { productionFiles } from "./production-source.js";
 
 const MIRRORED_TYPES = "mirrored-types";
 const MIN_MEMBERS = 3;
 
 interface AllowedPair {
-  /** The declared names: one for a shared name or a return-type alias, each for a shared member set. */
+  /** The declared names: one for a shared name, each for a shared member set. */
   readonly names: readonly string[];
   /** Root-relative, `/`-separated: every file that declares one of `names`. */
   readonly files: readonly string[];
@@ -27,7 +33,7 @@ interface AllowedPair {
 }
 
 const SIMULATOR_ROW = "the simulator's own zod row of what it reads back from the database to judge a run: it states what the run must show, so it is never imported from the code it judges";
-const DERIVED_ALIAS = "a local alias derived from the production type by a type operator (its parameters, its return, an indexed access), so it is that type and cannot drift from it; the production module exports no name for it";
+const DERIVED_ALIAS = "a local alias derived from the production type by a type operator (its parameters, an indexed access), so it is that type and cannot drift from it; the production module exports no name for it";
 const SERVICE_DEPS = "each service's own dependency set: they name the same ports today, and a port one of them comes to need must not reach the others";
 
 const MIRRORED_ALLOWED: readonly AllowedPair[] = [
@@ -147,8 +153,14 @@ interface TypeDeclaration {
   readonly line: number;
   /** Each member as `name?: type`, sorted, every named type read as `T`; null for a type that is not an object type. */
   readonly members: readonly string[] | null;
-  /** For `type X = ReturnType<typeof f>` with `f` imported, the module `f` is imported from; null otherwise. */
-  readonly returnOfImport: { readonly fn: string; readonly from: string } | null;
+}
+
+/** One `ReturnType<typeof f>` of a file, with `f` imported from a module of the repository or a package it installs. */
+interface ReturnOfImport {
+  readonly file: string;
+  readonly line: number;
+  readonly fn: string;
+  readonly from: string;
 }
 
 const printer = ts.createPrinter({ removeComments: true, newLine: ts.NewLineKind.LineFeed });
@@ -216,21 +228,28 @@ function rootName(name: ts.EntityName): string {
   return ts.isIdentifier(name) ? name.text : rootName(name.left);
 }
 
-/** For an alias that is exactly `ReturnType<typeof f>` with `f` imported, `f` and its module. */
-function returnOfImport(declaration: ts.InterfaceDeclaration | ts.TypeAliasDeclaration, imports: ReadonlyMap<string, string>, sf: ts.SourceFile): TypeDeclaration["returnOfImport"] {
-  if (!ts.isTypeAliasDeclaration(declaration) || !ts.isTypeReferenceNode(declaration.type)) return null;
-  const { typeName, typeArguments } = declaration.type;
-  if (!ts.isIdentifier(typeName) || typeName.text !== "ReturnType" || typeArguments?.length !== 1) return null;
-  const [argument] = typeArguments;
-  if (argument === undefined || !ts.isTypeQueryNode(argument)) return null;
-  const from = imports.get(rootName(argument.exprName));
-  return from === undefined ? null : { fn: argument.exprName.getText(sf), from };
+/** Every `ReturnType<typeof f>` of `source`, wherever it is written, with `f` imported from a module that is no Node built-in. */
+function returnsOfImports(file: string, source: string): ReturnOfImport[] {
+  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const imports = importedNames(file, source);
+  const found: ReturnOfImport[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && node.typeName.text === "ReturnType" && node.typeArguments?.length === 1) {
+      const [argument] = node.typeArguments;
+      const from = argument !== undefined && ts.isTypeQueryNode(argument) ? imports.get(rootName(argument.exprName)) : undefined;
+      if (argument !== undefined && ts.isTypeQueryNode(argument) && from !== undefined && !isBuiltin(from)) {
+        found.push({ file, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, fn: argument.exprName.getText(sf), from });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
 }
 
 /** Every top-level interface and type alias of `source`. */
 function typeDeclarations(file: string, source: string): TypeDeclaration[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const imports = importedNames(file, source);
   return sf.statements
     .filter((statement) => ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement))
     .map((declaration) => ({
@@ -238,7 +257,6 @@ function typeDeclarations(file: string, source: string): TypeDeclaration[] {
       file,
       line: sf.getLineAndCharacterOfPosition(declaration.getStart(sf)).line + 1,
       members: objectMembers(declaration, sf),
-      returnOfImport: returnOfImport(declaration, imports, sf),
     }));
 }
 
@@ -268,6 +286,27 @@ function groupsBy(declarations: readonly TypeDeclaration[], key: (declaration: T
 
 function where(group: readonly TypeDeclaration[]): string {
   return group.map((d) => `${d.name} at ${d.file}:${d.line}`).join(", ");
+}
+
+/** Every type of production source written over what an imported function returns, and a scan of no script. */
+function returnTypeViolations(context: LintContext): Violation[] {
+  const files = productionFiles(context);
+  const violations: Violation[] = files.flatMap(([file, source]) =>
+    returnsOfImports(file, source).map((site): Violation => {
+      const [top, pkg] = file.split("/");
+      return {
+        file,
+        line: site.line,
+        fromPkg: top === "packages" && pkg !== undefined ? pkg : "scripts",
+        specifier: MIRRORED_TYPES,
+        reason: `a type written over what ${site.fn}, imported from "${site.from}", returns; import the type that module exports for it, or export one there`,
+      };
+    }),
+  );
+  if (!files.some(([file]) => file.startsWith("scripts/"))) {
+    violations.push({ file: "scripts", line: 0, fromPkg: "scripts", specifier: MIRRORED_TYPES, reason: "no script to scan; a scan of nothing would pass" });
+  }
+  return violations;
 }
 
 export function run(context: LintContext): Violation[] {
@@ -307,10 +346,7 @@ export function run(context: LintContext): Violation[] {
   for (const group of sharedMembers) {
     if (new Set(group.map((d) => d.name)).size > 1) report(group, "one member set declared under more than one name");
   }
-  for (const declaration of declarations) {
-    const { returnOfImport: alias } = declaration;
-    if (alias !== null) report([declaration], `an alias of what ${alias.fn}, imported from "${alias.from}", returns; import the type that module exports for it, or export one there`);
-  }
+  violations.push(...returnTypeViolations(context));
   for (const pair of MIRRORED_ALLOWED) {
     if (!used.has(pair)) {
       violations.push({ file: pair.files[0] ?? "packages", line: 0, fromPkg: "*", specifier: MIRRORED_TYPES, reason: `the allowed entry ${pair.names.join(", ")} no longer matches its declarations; remove or correct its entry` });

@@ -5,6 +5,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ClientAnswers, ClientReceipts, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore } from "@ashara/engagement";
@@ -35,7 +36,7 @@ const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const NAME_PREFIX = `client-answer-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

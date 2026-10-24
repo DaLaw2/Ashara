@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { PlanReports, TERMINAL_KINDS, TenderIntake, ClientMessageRepository, createProjectWithTender, VisionRepository } from "@ashara/engagement";
 import type { IntakeStore, PlanReportStore } from "@ashara/engagement";
@@ -38,7 +39,7 @@ const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const NONCE = randomUUID().slice(0, 8);
 const NAME_PREFIX = `first-plan-test-${NONCE}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

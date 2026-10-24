@@ -105,7 +105,7 @@ export interface CoreLoopParts {
   /** The dispatcher, composed by composeDispatchService. */
   readonly dispatchService: DispatchSteps["dispatchService"];
   /** The sweepers of main, composed by composeSweepers. */
-  readonly sweepers: Pick<SweepSteps, "acceptanceSweeper" | "terminalSweeper">;
+  readonly sweepers: MainSweepers;
   /** The cells of this instance, composed by cellPortsOf. */
   readonly cells: Pick<DispatchSteps, "heldCells" | "infrastructureProbe">;
 }
@@ -143,8 +143,11 @@ export function composeDispatchService(deps: DispatchComposition): DispatchServi
   return new DispatchService({ ...dispatch, verifiers: composeVerifiers({ ...dispatch, suiteReview }) });
 }
 
+/** The sweepers of main the core loop steps. */
+export type MainSweepers = Pick<SweepSteps, "acceptanceSweeper" | "terminalSweeper">;
+
 /** Quality's sweeps of main, each over the same cells, policy, environment and checks, and one teardown of their cells. */
-export function composeSweepers(deps: Omit<MainSweepDeps, "teardown"> & { readonly logger: Logger }): Pick<SweepSteps, "acceptanceSweeper" | "terminalSweeper"> {
+export function composeSweepers(deps: Omit<MainSweepDeps, "teardown"> & { readonly logger: Logger }): MainSweepers {
   const { logger, ...sweep } = deps;
   const mainSweep: MainSweepDeps = { ...sweep, teardown: new CellTeardown({ ...(sweep.eventSink === undefined ? {} : { eventSink: sweep.eventSink }), logger }) };
   return { acceptanceSweeper: new AcceptanceSweeper(mainSweep), terminalSweeper: new TerminalSweeper(mainSweep) };

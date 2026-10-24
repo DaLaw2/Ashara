@@ -5,7 +5,7 @@ import type { DbHandle } from "@ashara/db";
 import type { BurnZone } from "@ashara/finance";
 import type { ProjectId } from "@ashara/shared";
 import { currentGoalTasks, currentPlanRevision } from "@ashara/delivery/reads";
-import { WORK_ITEM_STATUSES, parseStoredTaskSpec } from "@ashara/delivery/work-item";
+import { WORK_ITEM_STATUSES, parseStoredTaskSpec, type StoredTaskSpec } from "@ashara/delivery/work-item";
 import { StoredDecidesSchema, latestStoredChecks } from "@ashara/quality/stored-checks";
 import type { RiskRecords } from "../early-warning.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
@@ -26,7 +26,7 @@ class RiskRecordUnreadable extends Error {
   }
 }
 
-function specOf(taskId: string, raw: unknown): ReturnType<typeof parseStoredTaskSpec> {
+function specOf(taskId: string, raw: unknown): StoredTaskSpec | undefined {
   try {
     return parseStoredTaskSpec(raw);
   } catch (err) {

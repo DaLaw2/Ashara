@@ -102,11 +102,16 @@ interface HaltReportOutcome {
   readonly projectId: string;
 }
 
+/** The step that tells the halts' reports, and what each told. */
+export interface HaltReports {
+  runPending(): Promise<HaltReportOutcome[]>;
+}
+
 /**
  * The reports a halt is told by over the projects `ours` admits: each halt's terminal message (its
  * terminal sweep recorded first), then each resumption's report, as the core loop runs them.
  */
-export function haltReportsOf(db: Database, ours: (projectId: string) => boolean, options: { readonly escapes?: boolean } = {}): { runPending(): Promise<HaltReportOutcome[]> } {
+export function haltReportsOf(db: Database, ours: (projectId: string) => boolean, options: { readonly escapes?: boolean } = {}): HaltReports {
   const terminal = terminalReportsOf(db, ours, { kinds: ["halted"], ...options });
   const store = createBlockReportStore(db);
   const scoped: BlockReportStore = { ...store, dueReports: async () => (await store.dueReports()).filter((due) => ours(due.projectId)) };

@@ -126,7 +126,7 @@ function toLevel(level: WorkItemSpec["level"]): WorkItemLevel {
 }
 
 /** The kinds of work a plan holds, each with the role that owns it. */
-type PlanOwners = Readonly<Record<WorkKind, { readonly id: string }>>;
+export type PlanOwners = Readonly<Record<WorkKind, { readonly id: string }>>;
 
 /**
  * The owner of each kind of work from the project's latest roster, resolved before any LLM call:

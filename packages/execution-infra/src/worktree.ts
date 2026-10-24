@@ -548,7 +548,7 @@ export async function assertValidTargetProjectPath(targetProjectPath: string, wo
 const TASK_WORKTREE_PREFIX = "task-";
 
 /** What the startup sweep of task worktrees did: how many it removed, or why it could not run. */
-type WorktreeSweep =
+export type WorktreeSweep =
   | { readonly kind: "swept"; readonly removed: number }
   /** The workdir base does not exist yet: no worktree was ever created, so there is nothing to clean. */
   | { readonly kind: "no-workdir-base" }

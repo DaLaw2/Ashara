@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { SuiteReviewFindingRepository } from "@ashara/quality";
 import { BlockReports, TERMINAL_KINDS, VisionRepository } from "@ashara/engagement";
 import type { BlockReportStore } from "@ashara/engagement";
@@ -21,7 +22,7 @@ import { terminalReportsOf } from "./terminal-reports.js";
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

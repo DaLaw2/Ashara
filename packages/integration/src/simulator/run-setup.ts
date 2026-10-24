@@ -28,7 +28,7 @@ import { drawUniverse } from "./product.js";
 import type { Universe } from "./product.js";
 import { Personas } from "./personas.js";
 import { PLANTED, plantsBypassing } from "./plants.js";
-import { FAULTS, drawRates } from "./profile.js";
+import { FAULTS, drawRates, type AdversaryRates } from "./profile.js";
 import { ResidueWatch } from "./residue.js";
 import type { Corruption } from "./run-cycle-loop.js";
 import { leakedConnections, stopIfAborted } from "./run-instance.js";
@@ -100,7 +100,7 @@ export class CleanupStepFailed extends Error {
 /** What the seed's tape draws for the whole run, in the order it draws them. */
 export interface RunDraws {
   readonly tape: Tape;
-  readonly rates: ReturnType<typeof drawRates>;
+  readonly rates: AdversaryRates;
   readonly clock: SimClock;
   readonly universe: Universe;
   readonly personas: Personas;

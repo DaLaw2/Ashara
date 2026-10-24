@@ -80,7 +80,7 @@ type FinishArgs = z.infer<typeof finishArgs> | z.infer<typeof environmentFinishA
 
 const pathProperty = { type: "string", description: "Path relative to the workspace root." } as const;
 
-type ToolSchemas = Readonly<Record<string, TurnToolSchema>>;
+export type ToolSchemas = Readonly<Record<string, TurnToolSchema>>;
 
 const BLOCKED_ON_DESCRIPTION =
   'Required when status is "blocked": whose it is to clear. "needs-work": interfaceEntries names, by key as the brief\'s ' +
@@ -341,7 +341,7 @@ export function toolSchemasFor(toolProfile: ToolProfile, runChecks: boolean): To
   }
 }
 
-type ToolExecution =
+export type ToolExecution =
   | { readonly kind: "result"; readonly output: string; readonly isError: boolean }
   | { readonly kind: "finish"; readonly args: FinishArgs }
   | { readonly kind: "dispute"; readonly checkName: string; readonly ofTask: string | null; readonly reason: string }

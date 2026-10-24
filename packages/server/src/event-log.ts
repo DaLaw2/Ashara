@@ -75,7 +75,7 @@ class EventLineInvalid extends Error {
   }
 }
 
-interface EventLog {
+export interface EventLog {
   emit(event: EventLine): void;
 }
 

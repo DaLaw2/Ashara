@@ -751,7 +751,6 @@ export class LLMGateway {
  */
 const CONFIGURATION_REJECTION_STATUSES: ReadonlySet<number> = new Set([401, 402, 403, 404]);
 
-/** A provider's rejection of Ashara's configuration, as its own class; `null` for any other request failure. */
 /** Judged before the gate admits a turn: a tool schema the provider refuses is never sent or spent on. */
 function refuseUnacceptableTools(request: TurnRequest, target: CallTarget, site: KnownLLMSite): void {
   for (const [name, tool] of Object.entries(request.tools)) {
@@ -782,6 +781,7 @@ function refuseOverflowingTurn(request: TurnRequest, target: CallTarget, outputR
   }
 }
 
+/** A provider's rejection of Ashara's configuration, as its own class; `null` for any other request failure. */
 function configurationRejectionOf(error: unknown, resolved: CallTarget): ProviderConfigurationRejected | null {
   if (!APICallError.isInstance(error) || error.statusCode === undefined) return null;
   if (!CONFIGURATION_REJECTION_STATUSES.has(error.statusCode)) return null;

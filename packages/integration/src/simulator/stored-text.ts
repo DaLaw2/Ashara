@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { checkReports, readReportRecords } from "./client-reports.js";
 import type { Database } from "./database.js";
@@ -53,7 +53,7 @@ export async function judgeStoredText(
   projectId: string,
   briefs: "as-recorded" | readonly RecomposedBrief[],
 ): Promise<StoredTextViolation[]> {
-  const rows = async <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>): Promise<T[]> =>
+  const rows = async <T>(schema: z.ZodType<T>, query: SQL): Promise<T[]> =>
     z.array(schema).parse((await db.execute(query)).rows);
   const [project] = await rows(projectRow, sql`SELECT ${projectState} AS status FROM projects WHERE id = ${projectId}`);
   if (project === undefined) throw new StoredProjectMissing(projectId);

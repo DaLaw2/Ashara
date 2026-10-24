@@ -31,6 +31,7 @@ import { z } from "zod";
 import { PodmanSubstrate, WORKSPACE_ROOT, type Cell, type ExecResult } from "@ashara/execution-infra";
 import { parseEnvironmentDefinition } from "@ashara/quality";
 import { JsonParseFailed, createLogger, describeErrorChain, parseJson, stdoutSink, systemClock } from "@ashara/shared";
+import type { Logger } from "@ashara/shared";
 import { evidenceSchema, guaranteeIdSchema, guaranteeVerdictSchema, overallOf, overallSchema, type JudgedGuarantee, type JudgedVerdict, type Overall, type RunRecord } from "@ashara/evaluation";
 import { treeDigest } from "./tree-digest.js";
 
@@ -258,7 +259,7 @@ class SuiteRunInterrupted extends Error {
 }
 
 /** The cells' logger: their exec records are debug, below what it writes; their label is `trace`. */
-function cellLogger(trace: string): ReturnType<typeof createLogger> {
+function cellLogger(trace: string): Logger {
   return { ...createLogger({ sink: stdoutSink, clock: systemClock, minLevel: "info" }), trace: () => trace };
 }
 

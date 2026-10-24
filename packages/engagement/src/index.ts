@@ -54,6 +54,7 @@ export { listDueTerminals, postTerminalMessage } from "./repositories/terminal-r
 export { terminalTableOf } from "./repositories/terminal-report.js";
 export { postPlanReport, postPlanRevisionReport } from "./repositories/plan-report.js";
 export { lastReportGuaranteeVerdictsOf } from "./repositories/guarantee-report.js";
+export type { LastTerminalReport } from "./repositories/guarantee-report.js";
 export { listOpenAnswers, readOpenAnswer, recordAnswerFailure, recordClientAnswer } from "./repositories/client-answer.js";
 export { PROJECT_STATUSES, acceptProject } from "./project-lifecycle.js";
 export type { VisionSource } from "./vision-language/index.js";

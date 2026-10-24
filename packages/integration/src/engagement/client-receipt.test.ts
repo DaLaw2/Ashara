@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { ClientChanges, ClientMessageRepository, ClientReceipts, ClientStops, VisionRepository, acceptProject, consumeTenderWithoutIntake, createProjectWithTender } from "@ashara/engagement";
@@ -33,7 +34,7 @@ const NAME_PREFIX = `client-receipt-test-${randomUUID().slice(0, 8)}`;
 const TENDER = "Build a command that prints a greeting.";
 const LEAVE_OUT_COLOUR = { ops: [{ op: "add-exclusion", text: "Coloured output.", direction: "neutral" }], confirms: [] };
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

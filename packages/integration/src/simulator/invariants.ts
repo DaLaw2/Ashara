@@ -175,102 +175,102 @@ class SnapshotRowMissing extends Error {
  * with the report that told it.
  */
 async function readProjectRow(db: Database, projectId: string): Promise<ProjectRow> {
-const [project] = z.array(projectRow).parse(
-  (
-    await db.execute(sql`
-      SELECT ${projectState} AS status,
-             (SELECT b.kind FROM project_blocks b
-               WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedCategory",
-             (SELECT b.reason FROM project_blocks b
-               WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedReason",
-             EXISTS (SELECT 1 FROM project_plans pp WHERE pp.project_id = projects.id
-               AND pp.plan_stopped_at IS NOT NULL) AS "planStopped", workspace_path AS "workspacePath",
-             ARRAY(SELECT f.step FROM step_faults f WHERE f.project_id = projects.id
-               AND f.parked_at IS NULL ORDER BY f.step) AS "retryingSteps",
-             (SELECT s.id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed
-               ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepId",
-             (SELECT (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'delivered'
-               AND t.subject_id = s.id) FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed
-                 ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepReportId"
-      FROM projects WHERE id = ${projectId}`)
-  ).rows,
-);
-if (project === undefined) throw new SnapshotRowMissing(projectId, "projects", "the run's project row");
+  const [project] = z.array(projectRow).parse(
+    (
+      await db.execute(sql`
+        SELECT ${projectState} AS status,
+               (SELECT b.kind FROM project_blocks b
+                 WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedCategory",
+               (SELECT b.reason FROM project_blocks b
+                 WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "blockedReason",
+               EXISTS (SELECT 1 FROM project_plans pp WHERE pp.project_id = projects.id
+                 AND pp.plan_stopped_at IS NOT NULL) AS "planStopped", workspace_path AS "workspacePath",
+               ARRAY(SELECT f.step FROM step_faults f WHERE f.project_id = projects.id
+                 AND f.parked_at IS NULL ORDER BY f.step) AS "retryingSteps",
+               (SELECT s.id FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed
+                 ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepId",
+               (SELECT (SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'delivered'
+                 AND t.subject_id = s.id) FROM acceptance_sweeps s WHERE s.project_id = projects.id AND s.passed
+                   ORDER BY s.created_at DESC, s.id DESC LIMIT 1) AS "passedSweepReportId"
+        FROM projects WHERE id = ${projectId}`)
+    ).rows,
+  );
+  if (project === undefined) throw new SnapshotRowMissing(projectId, "projects", "the run's project row");
   return project;
 }
 
 /** The project's work items, oldest first, each with the record keys it cites. */
 async function readItems(db: Database, projectId: string): Promise<ItemRow[]> {
-const items = z.array(itemRow).parse(
-  (
-    await db.execute(sql`
-      SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
-             task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit",
-               merge_kind AS "mergeKind",
-             owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount",
-             infrastructure_faults AS "infrastructureFaults",
-             COALESCE((SELECT json_agg(s->>'id') FROM jsonb_array_elements(CASE
-               WHEN jsonb_typeof(task_spec->'sources') = 'array'
-               THEN task_spec->'sources' ELSE '[]'::jsonb END) s), '[]'::json) AS cites
-      FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`)
-  ).rows,
-);
+  const items = z.array(itemRow).parse(
+    (
+      await db.execute(sql`
+        SELECT id, title, status, level, work_kind AS "workKind", task_spec->>'origin' AS origin,
+               task_spec->>'checksFor' AS "checksFor", blocked_reason AS "blockedReason", merge_commit AS "mergeCommit",
+                 merge_kind AS "mergeKind",
+               owner_role_id AS "ownerRoleId", dispatch_count AS "dispatchCount",
+               infrastructure_faults AS "infrastructureFaults",
+               COALESCE((SELECT json_agg(s->>'id') FROM jsonb_array_elements(CASE
+                 WHEN jsonb_typeof(task_spec->'sources') = 'array'
+                 THEN task_spec->'sources' ELSE '[]'::jsonb END) s), '[]'::json) AS cites
+        FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`)
+    ).rows,
+  );
   return items;
 }
 
 /** The project's block episodes, oldest first, each with the reports that told its block and its resumption. */
 async function readEpisodes(db: Database, projectId: string): Promise<Array<z.infer<typeof episodeRow>>> {
-const episodes = z.array(episodeRow).parse(
-  (
-    await db.execute(sql`
-      SELECT b.id, b.kind, ended_at IS NOT NULL AS ended, b.end_kind AS "endKind", (SELECT t.report_id
-        FROM told_reports t WHERE t.subject_kind = 'project-resumed' AND t.subject_id = b.id) AS "resumedReportId",
-             COALESCE((SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-blocked'
-               AND t.subject_id = b.id), CASE WHEN b.kind = 'planning_stopped' THEN (
-               SELECT m.id FROM client_messages m WHERE m.project_id = b.project_id
-                 AND m.reports_on = 'planning-stopped'
-                 AND m.created_at >= b.blocked_at ORDER BY m.created_at, m.id LIMIT 1) END) AS "reportId"
-      FROM project_blocks b WHERE b.project_id = ${projectId} ORDER BY b.blocked_at, b.id`)
-  ).rows,
-);
+  const episodes = z.array(episodeRow).parse(
+    (
+      await db.execute(sql`
+        SELECT b.id, b.kind, ended_at IS NOT NULL AS ended, b.end_kind AS "endKind", (SELECT t.report_id
+          FROM told_reports t WHERE t.subject_kind = 'project-resumed' AND t.subject_id = b.id) AS "resumedReportId",
+               COALESCE((SELECT t.report_id FROM told_reports t WHERE t.subject_kind = 'project-blocked'
+                 AND t.subject_id = b.id), CASE WHEN b.kind = 'planning_stopped' THEN (
+                 SELECT m.id FROM client_messages m WHERE m.project_id = b.project_id
+                   AND m.reports_on = 'planning-stopped'
+                   AND m.created_at >= b.blocked_at ORDER BY m.created_at, m.id LIMIT 1) END) AS "reportId"
+        FROM project_blocks b WHERE b.project_id = ${projectId} ORDER BY b.blocked_at, b.id`)
+    ).rows,
+  );
   return episodes;
 }
 
 /** Every client correction recorded as holding work, with what it held and what it left unreached (correctionRow). */
 async function readCorrections(db: Database, projectId: string): Promise<Array<z.infer<typeof correctionRow>>> {
-const corrections = z.array(correctionRow).parse(
-  (
-    await db.execute(sql`
-      SELECT ch.vision_version AS "visionVersion", ch.affected,
-             COALESCE((SELECT json_agg(DISTINCT w.title) FROM work_items w
-               JOIN work_item_transitions t ON t.work_item_id = w.id AND t.to_status = 'InProgress'
-               WHERE w.project_id = ch.project_id AND w.level = 'Task'
-                 AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE
-                   WHEN jsonb_typeof(w.task_spec->'sources') = 'array'
-                   THEN w.task_spec->'sources' ELSE '[]'::jsonb END) s WHERE s->>'id' = ANY(ch.affected))
-                 AND t.created_at > ch.created_at
-                 AND t.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r
-                   WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
-               '[]'::json) AS "startedWhileHeld",
-             COALESCE((SELECT json_agg(DISTINCT u.key ORDER BY u.key) FROM (
-                 SELECT u.key FROM vision_documents d,
-                   jsonb_array_elements(CASE WHEN jsonb_typeof(d.inferences) = 'array'
-                     THEN d.inferences ELSE '[]'::jsonb END) i,
-                   jsonb_array_elements_text(CASE WHEN jsonb_typeof(i->'underpins') = 'array'
-                     THEN i->'underpins' ELSE '[]'::jsonb END) u(key)
-                   WHERE d.project_id = ch.project_id AND d.version IN (ch.vision_version - 1, ch.vision_version)
-                     AND i->>'key' = ANY(ch.affected)
-                 UNION
-                 SELECT g->>'id' FROM vision_documents d,
-                   jsonb_array_elements(CASE WHEN jsonb_typeof(d.guarantees) = 'array'
-                     THEN d.guarantees ELSE '[]'::jsonb END) g
-                   WHERE d.project_id = ch.project_id AND d.version IN (ch.vision_version - 1, ch.vision_version)
-                     AND g->'source'->>'kind' = 'assumption' AND g->'source'->>'id' = ANY(ch.affected)
-               ) u(key) WHERE NOT u.key = ANY(ch.affected)),
-               '[]'::json) AS "unreached"
-      FROM correction_holds ch WHERE ch.project_id = ${projectId} ORDER BY ch.vision_version`)
-  ).rows,
-);
+  const corrections = z.array(correctionRow).parse(
+    (
+      await db.execute(sql`
+        SELECT ch.vision_version AS "visionVersion", ch.affected,
+               COALESCE((SELECT json_agg(DISTINCT w.title) FROM work_items w
+                 JOIN work_item_transitions t ON t.work_item_id = w.id AND t.to_status = 'InProgress'
+                 WHERE w.project_id = ch.project_id AND w.level = 'Task'
+                   AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE
+                     WHEN jsonb_typeof(w.task_spec->'sources') = 'array'
+                     THEN w.task_spec->'sources' ELSE '[]'::jsonb END) s WHERE s->>'id' = ANY(ch.affected))
+                   AND t.created_at > ch.created_at
+                   AND t.created_at < COALESCE((SELECT r.created_at FROM plan_revisions r
+                     WHERE r.id = ch.plan_revision_id), 'infinity'::timestamptz)),
+                 '[]'::json) AS "startedWhileHeld",
+               COALESCE((SELECT json_agg(DISTINCT u.key ORDER BY u.key) FROM (
+                   SELECT u.key FROM vision_documents d,
+                     jsonb_array_elements(CASE WHEN jsonb_typeof(d.inferences) = 'array'
+                       THEN d.inferences ELSE '[]'::jsonb END) i,
+                     jsonb_array_elements_text(CASE WHEN jsonb_typeof(i->'underpins') = 'array'
+                       THEN i->'underpins' ELSE '[]'::jsonb END) u(key)
+                     WHERE d.project_id = ch.project_id AND d.version IN (ch.vision_version - 1, ch.vision_version)
+                       AND i->>'key' = ANY(ch.affected)
+                   UNION
+                   SELECT g->>'id' FROM vision_documents d,
+                     jsonb_array_elements(CASE WHEN jsonb_typeof(d.guarantees) = 'array'
+                       THEN d.guarantees ELSE '[]'::jsonb END) g
+                     WHERE d.project_id = ch.project_id AND d.version IN (ch.vision_version - 1, ch.vision_version)
+                       AND g->'source'->>'kind' = 'assumption' AND g->'source'->>'id' = ANY(ch.affected)
+                 ) u(key) WHERE NOT u.key = ANY(ch.affected)),
+                 '[]'::json) AS "unreached"
+        FROM correction_holds ch WHERE ch.project_id = ${projectId} ORDER BY ch.vision_version`)
+    ).rows,
+  );
   return corrections;
 }
 
@@ -279,16 +279,16 @@ async function readSpend(
   db: Database,
   projectId: string,
 ): Promise<{ readonly spend: number; readonly unrecorded: number }> {
-const [spend] = z.array(z.object({ spend: z.coerce.number(), unrecorded: z.coerce.number() })).parse(
-  (
-    await db.execute(sql`
-      SELECT coalesce(sum(coalesce(cost_usd, estimated_cost_usd)), 0) AS spend,
-             count(*) FILTER (WHERE cost_usd IS NULL AND estimated_cost_usd IS NULL) AS unrecorded
-      FROM llm_calls WHERE project_id = ${projectId}`)
-  ).rows,
-);
-// I5 is judged on this row: without it the spend would read as zero and the cap could not be seen crossed.
-if (spend === undefined) throw new SnapshotRowMissing(projectId, "llm_calls", "the spend aggregate row");
+  const [spend] = z.array(z.object({ spend: z.coerce.number(), unrecorded: z.coerce.number() })).parse(
+    (
+      await db.execute(sql`
+        SELECT coalesce(sum(coalesce(cost_usd, estimated_cost_usd)), 0) AS spend,
+               count(*) FILTER (WHERE cost_usd IS NULL AND estimated_cost_usd IS NULL) AS unrecorded
+        FROM llm_calls WHERE project_id = ${projectId}`)
+    ).rows,
+  );
+  // I5 is judged on this row: without it the spend would read as zero and the cap could not be seen crossed.
+  if (spend === undefined) throw new SnapshotRowMissing(projectId, "llm_calls", "the spend aggregate row");
   return spend;
 }
 
@@ -739,7 +739,7 @@ type SnapshotContext = Parameters<typeof checkSnapshot>[2];
 type AddViolation = (invariant: InvariantId, key: string, statement: string) => void;
 
 /** I2, judged on one project's snapshot. */
-function correctionAndHaltViolations(snapshot: Snapshot, context: SnapshotContext, add: AddViolation): void {
+function personWaitAndHaltReportViolations(snapshot: Snapshot, context: SnapshotContext, add: AddViolation): void {
   // I2: no work item waits on a person; every halt episode has exactly one report. Every exit
   // blockedExitOf names is taken by the loop's own sweep (orchestrator parked-exits.ts, whose test
   // names each exit's writer); a reason production cannot parse has no exit at all.
@@ -1000,7 +1000,7 @@ export function checkSnapshot(
   const add = (invariant: InvariantId, key: string, statement: string): void => {
     violations.push({ invariant, step, statement, key: `${invariant}:${key}` });
   };
-  correctionAndHaltViolations(snapshot, context, add);
+  personWaitAndHaltReportViolations(snapshot, context, add);
   independenceViolations(snapshot, context, add);
   toldViolations(snapshot, context, add);
   textFactViolations(snapshot, context, add);

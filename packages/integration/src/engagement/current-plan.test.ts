@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { listProjectBurns, readChangeImpact } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
@@ -18,7 +19,7 @@ import { createWorkItemId } from "@ashara/shared";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const BUDGETS = { perTaskRequests: 50, perProjectRequests: 20, verificationReservePercent: 25 };
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<ProjectId>();
 

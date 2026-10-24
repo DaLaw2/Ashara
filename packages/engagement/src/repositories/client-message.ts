@@ -407,8 +407,30 @@ const readingOrder = (): SQL[] => [asc(projectHalted(projects.id)), asc(clientMe
 
 const questions = alias(clientMessages, "question");
 
+/** One inbound message of a reading queue, as stored. */
+interface QueuedMessage {
+  readonly id: string;
+  readonly projectId: string;
+  readonly body: string;
+  readonly intakeAttempts: number;
+  readonly intakeLastError: string | null;
+  readonly intakeLastFailure: string | null;
+}
+
+/** One answer of the answers' reading queue, as stored. */
+export interface OpenAnswerMessage extends QueuedMessage {
+  readonly questionId: string;
+  readonly planned: boolean;
+  readonly halted: boolean;
+}
+
+/** One change of the changes' reading queue, as stored, with whether Delivery has its project halted, undecoded. */
+export interface OpenChangeMessage extends QueuedMessage {
+  readonly halted: unknown;
+}
+
 /** The answers' reading queue, as stored, with the question each answers, whether its project has a first plan and whether Delivery has it halted. */
-export async function openAnswerMessages(db: DbHandle, maxAttempts: number, answerId: string | null) {
+export async function openAnswerMessages(db: DbHandle, maxAttempts: number, answerId: string | null): Promise<OpenAnswerMessage[]> {
   return db
     .select({
       ...readingColumns,
@@ -425,7 +447,7 @@ export async function openAnswerMessages(db: DbHandle, maxAttempts: number, answ
 }
 
 /** The changes' reading queue, as stored, with whether Delivery has each one's project halted. */
-export async function openChangeMessages(db: DbHandle, maxAttempts: number, changeId: string | null) {
+export async function openChangeMessages(db: DbHandle, maxAttempts: number, changeId: string | null): Promise<OpenChangeMessage[]> {
   return db
     .select({ ...readingColumns, halted: projectHalted(projects.id) })
     .from(clientMessages)

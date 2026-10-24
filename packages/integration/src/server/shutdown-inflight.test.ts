@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { attemptProfileOf } from "@ashara/delivery";
 import { ClientChanges, ClientMessageRepository, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { CellBackend } from "@ashara/execution-infra";
@@ -35,7 +36,7 @@ const SHUTDOWN_DEADLINE_MS = 10_000;
 /** How far past the shutdown's deadline this test waits before it fails the shutdown as unbounded. */
 const TEST_BOUND_MARGIN_MS = 2_000;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

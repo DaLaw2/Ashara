@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { ClientMessageRepository, ClientStops, TERMINAL_KINDS, TerminalMessage, VisionRepository, terminalTableOf } from "@ashara/engagement";
 import type { ClientStopStore, TerminalReportStore } from "@ashara/engagement";
@@ -24,7 +25,7 @@ import { sweepTerminalsOf } from "./terminal-sweeps.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `terminal-messages-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 const ours = (projectId: string): boolean => ourProjects.has(projectId);
@@ -309,7 +310,7 @@ function messageOf(due: Due): TerminalMessage {
 }
 
 /** The terminals one connection lists of `projects`, each terminal's sweep recorded first. */
-async function dueOn(handle: ReturnType<typeof createDb>, projects: ReadonlySet<string>): Promise<Due[]> {
+async function dueOn(handle: Database, projects: ReadonlySet<string>): Promise<Due[]> {
   await sweepTerminalsOf(handle, (id) => projects.has(id));
   return (await createTerminalReportStore(handle, systemClock).dueTerminals(TERMINAL_KINDS)).filter((due) => projects.has(dueProjectOf(due)));
 }

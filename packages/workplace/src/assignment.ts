@@ -89,7 +89,7 @@ const limitsSchema = z
   })
   .strict();
 
-interface ResolvedLimits {
+export interface ResolvedLimits {
   readonly maxTurns: number;
   readonly wallClockMs: number;
   readonly perCommandTimeoutSeconds: number;

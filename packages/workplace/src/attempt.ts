@@ -4,7 +4,7 @@ import { ContextBudgetExceeded, PreCallRefusal, modelCallAbortedOf } from "@asha
 import type { ContextualTurnLlm, CostedTurnResult } from "@ashara/finance";
 import { describeErrorChain, serializeError } from "@ashara/shared";
 import type { Clock } from "@ashara/shared";
-import type { Assignment } from "./assignment.js";
+import type { Assignment, ResolvedLimits } from "./assignment.js";
 import { resolveLimits } from "./assignment.js";
 import type { CheckDefinitionPort } from "./check-definition.js";
 import type { TaskCheckRunPort } from "./check-run.js";
@@ -17,6 +17,7 @@ import { promptDigest } from "./prompt-digest.js";
 import { describeInput, toRecordedOutcome, truncateText } from "./records.js";
 import type { AttemptRecord, AttemptRecordSink } from "./records.js";
 import { executeTool, toolSchemasFor } from "./tools.js";
+import type { ToolExecution, ToolSchemas } from "./tools.js";
 
 /**
  * The routing site agent work is tagged with today (model-access KNOWN_LLM_SITES, config/models.toml):
@@ -111,7 +112,7 @@ function assertToolPorts(assignment: Assignment, deps: AttemptDeps): void {
 }
 
 type ToolCall = CostedTurnResult["toolCalls"][number];
-type CallExecution = Awaited<ReturnType<typeof executeTool>> | { readonly kind: "result"; readonly isError: true; readonly output: ReturnType<typeof truncateText> };
+type CallExecution = ToolExecution | { readonly kind: "result"; readonly isError: true; readonly output: string };
 
 /** What one step of the loop leaves: the attempt's Outcome when the step ended it, or what the next step takes. */
 type Step<T> = { readonly kind: "ended"; readonly outcome: Promise<Outcome> } | { readonly kind: "next"; readonly value: T };
@@ -179,13 +180,13 @@ function concludingCall(execution: Extract<CallExecution, { readonly kind: "fini
 
 /** One attempt in flight: its turns, its cost tally and what its records and outcome report. */
 class AttemptLoop {
-  private readonly tools: ReturnType<typeof toolSchemasFor>;
+  private readonly tools: ToolSchemas;
   private readonly startedAt: number;
   private readonly deadline: number;
   private readonly llm: ReturnType<ContextualTurnLlm["forCall"]>;
   private readonly system: string;
   private readonly messages: ModelMessage[];
-  private readonly digest: ReturnType<typeof promptDigest>;
+  private readonly digest: string;
   private readonly costs = new CostTally();
   private turnsUsed = 0;
   private lastToolCall: LastToolCall | null = null;
@@ -197,7 +198,7 @@ class AttemptLoop {
   constructor(
     private readonly assignment: Assignment,
     private readonly deps: AttemptDeps,
-    private readonly limits: ReturnType<typeof resolveLimits>,
+    private readonly limits: ResolvedLimits,
   ) {
     const { toolProfile } = assignment;
     this.tools = toolSchemasFor(toolProfile, deps.taskChecks !== null);

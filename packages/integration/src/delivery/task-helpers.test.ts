@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { resolveTargetProjectPath } from "@ashara/delivery";
 import { parseProjectId } from "@ashara/shared";
 import { recordingLogger } from "@ashara/shared/testing";
@@ -15,7 +16,7 @@ const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 const PREFIX = `task-helpers-test-${NONCE}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let projects: ProjectRepository;
 let clientId: string;
 let workdirBase: string;

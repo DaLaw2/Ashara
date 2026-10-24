@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { REPORT_SUBJECT, REPORT_SUBJECTS } from "@ashara/engagement/report-subjects";
 
 // The subjects a report is on are Engagement's vocabulary, and the column's CHECK, written in a
@@ -10,7 +11,7 @@ import { REPORT_SUBJECT, REPORT_SUBJECTS } from "@ashara/engagement/report-subje
 
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 
 beforeAll(() => {
   db = createDb(DATABASE_URL);

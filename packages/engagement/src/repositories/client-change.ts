@@ -15,6 +15,7 @@ import type { ChangeImpact, CitingTask } from "../correction.js";
 import { Vision } from "../vision.js";
 import type { RevisionOp } from "../vision-language/contract-op.js";
 import { ClientMessageRepository, LockedStanding, consumeInbound, openChangeMessages, recordReadingFailure } from "./client-message.js";
+import type { OpenChangeMessage } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's changes of direction (client_messages kind 'change'): each read once against its
@@ -79,8 +80,6 @@ const KeyRowsSchema = z.array(z.object({ key: z.string().min(1) }));
 const ProposalRowsSchema = z.array(
   z.object({ id: z.string(), ops: z.unknown(), sourceMessageId: z.string().nullable(), sourceBody: z.string().nullable() }),
 );
-
-type OpenChangeMessage = Awaited<ReturnType<typeof openChangeMessages>>[number];
 
 /** One open change's message, read with its project's current vision, used keys and proposals. */
 async function openChangeRow(db: DbHandle, visions: VisionRepository, row: OpenChangeMessage): Promise<OpenChange> {

@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { parseStoredTaskSpec } from "@ashara/delivery";
 import type { VisionSource } from "@ashara/engagement";
@@ -230,7 +230,7 @@ export interface ReportRecords {
 }
 
 export async function readReportRecords(db: Database, projectId: string): Promise<ReportRecords> {
-  const rows = async <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>): Promise<T[]> =>
+  const rows = async <T>(schema: z.ZodType<T>, query: SQL): Promise<T[]> =>
     z.array(schema).parse((await db.execute(query)).rows);
   return {
     reports: await rows(
@@ -333,7 +333,7 @@ export async function readReportRecords(db: Database, projectId: string): Promis
 
 async function passedSweepsOf(
   projectId: string,
-  rows: <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>) => Promise<T[]>,
+  rows: <T>(schema: z.ZodType<T>, query: SQL) => Promise<T[]>,
 ): Promise<ReportRecords["passedSweeps"]> {
   const sweeps = await rows(
     passedSweepRow,

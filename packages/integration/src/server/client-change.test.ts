@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ClientChanges, ClientMessageRepository, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientChangeStore } from "@ashara/engagement";
@@ -26,7 +27,7 @@ const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `client-change-test-${randomUUID().slice(0, 8)}`;
 const TENDER = "Build a command that prints a greeting.";
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

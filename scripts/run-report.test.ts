@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { formatRunReport, readMappingFile, readPacketKey, readRunEvidence, runReport } from "@ashara/evaluation";
 import { LlmCallRepository } from "@ashara/finance";
 import { DevSessionRepository, createAgentBrief, createSessionId, toSessionAttempt, withSessionLifecycle, runAttempt } from "@ashara/workplace";
@@ -81,7 +82,7 @@ const LlmCallRowSchema = z.object({
   estimatedCostUsd: z.number().nullable(),
 });
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 let db: Db;
 let projectId: ProjectId;
 const taskIds: string[] = [];

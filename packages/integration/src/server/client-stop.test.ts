@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ClientStops, ClientMessageRepository, TERMINAL_KINDS, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientStopStore } from "@ashara/engagement";
 import { PlanningService, adaptWorkItemRepo, createFirstPlanStore, listDuePlanReports, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
@@ -22,7 +23,7 @@ import { sweepTerminalsOf } from "./terminal-sweeps.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `client-stop-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

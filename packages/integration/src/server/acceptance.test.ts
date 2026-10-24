@@ -49,7 +49,7 @@ const MERGE_A = "a1".repeat(20);
 const MAIN = "c3".repeat(20);
 const SCAFFOLD_MERGE = "5e".repeat(20);
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

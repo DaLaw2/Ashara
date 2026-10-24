@@ -3,9 +3,8 @@ import type { PlanningVision } from "./acl/engagement-acl.js";
 import type { DecompositionResult, EnvironmentPlanning } from "./decomposition-types.js";
 import type { WorkItem } from "./domain/index.js";
 import { supersedeWorkItem, takeEvents } from "./domain/index.js";
-import type { FirstPlanWrite } from "./first-plan.js";
+import type { FirstPlanWrite, PlanOwners } from "./first-plan.js";
 import { toWrite } from "./first-plan.js";
-import type { planOwners } from "./first-plan.js";
 import type {
   CorrectionRequest,
   PlanRevisionWork,
@@ -39,7 +38,7 @@ interface RevisionComposition {
   readonly vision: PlanningVision;
   /** The new plan and the environment it builds on; null when a correction left nothing to plan. */
   readonly planned: { readonly decomposition: DecompositionResult; readonly environment: EnvironmentPlanning } | null;
-  readonly owners: ReturnType<typeof planOwners>;
+  readonly owners: PlanOwners;
   /** The project's completed tasks, kept. */
   readonly completed: readonly PlannedItem[];
   readonly scope: RevisionScope;

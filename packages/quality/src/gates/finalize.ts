@@ -14,6 +14,7 @@ import {
   taskBranchName,
   tentativeMerge,
   type MainConflict,
+  type MergeResult,
 } from "../merge.js";
 import { MERGE_CONFLICTED, TREE_REGRESSED, WORK_FAILED } from "../task-verdict.js";
 import type { FailureVerdict } from "../task-verdict.js";
@@ -262,7 +263,7 @@ interface HeldFinalize {
   readonly attempt: number;
 }
 
-type FailedMerge = Extract<Awaited<ReturnType<typeof tentativeMerge>>, { readonly status: "conflict" | "error" }>;
+type FailedMerge = Extract<MergeResult, { readonly status: "conflict" | "error" }>;
 
 async function finalizeHeld(
   deps: FinalizeDeps,

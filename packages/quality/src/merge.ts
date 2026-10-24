@@ -14,7 +14,7 @@ function exitCodeOf(e: unknown): number | null {
   return typeof e === "object" && e !== null && "code" in e && typeof e.code === "number" ? e.code : null;
 }
 
-type MergeResult =
+export type MergeResult =
   | { readonly status: "clean" }
   | { readonly status: "conflict"; readonly files: string[] }
   /** Git refused the merge for a reason other than a conflict, or could not say which files conflict: `cause` is its error. */

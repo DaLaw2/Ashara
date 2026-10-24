@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProviderError, ROUTING_RULES, SecondOpinionUnanswered, SecondOpinionUnavailable } from "@ashara/finance";
 import type { CapabilityLevel, ContextualLlm, SecondOpinionStrength } from "@ashara/finance";
 import { CheckSetFreezeRepository, SuiteReviewFindingRepository, SuiteReviewJudgementRepository, TaskCheckRepository, blockingReview, suiteReviewClaimsOf, suiteReviewJudgementsOf } from "@ashara/quality";
@@ -18,7 +19,7 @@ import type { ProjectId } from "@ashara/shared";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `suite-review-judgements-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 let projectId: ProjectId;
 

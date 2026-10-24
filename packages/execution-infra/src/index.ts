@@ -47,7 +47,7 @@ export {
   removeThrowawayCheckouts,
   sweepOrphanedWorktrees,
 } from "./worktree.js";
-export type { PartialCommitOutcome, WorkdirInfo } from "./worktree.js";
+export type { PartialCommitOutcome, WorkdirInfo, WorktreeSweep } from "./worktree.js";
 export { pruneStaleEnvironmentImages, resolveCurrentEnvironment } from "./current-environment.js";
 export type { CurrentEnvironment, EnvironmentImages, EnvironmentStatementSource } from "./current-environment.js";
 export type { AttemptCellImage, EnvironmentCheckReport, EnvironmentTestRun } from "./environment-report.js";

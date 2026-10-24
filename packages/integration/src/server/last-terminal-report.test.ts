@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";
 import { parseProjectId } from "@ashara/shared";
@@ -16,7 +17,7 @@ const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `last-terminal-report-test-${randomUUID().slice(0, 8)}`;
 const IdRowSchema = z.object({ id: z.string() });
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 let projectId: string;
 

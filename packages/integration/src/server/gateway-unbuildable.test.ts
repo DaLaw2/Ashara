@@ -9,7 +9,7 @@ import { concurrentTaskLanes } from "@ashara/delivery";
 import { createProjectWithTender } from "@ashara/engagement";
 import { ClientRepository, createDb, createPgPool, resolveTestDatabaseUrl } from "@ashara/db";
 import { SecretRepository } from "@ashara/security";
-import type { PoolFactory } from "@ashara/db";
+import type { PoolFactory, Database } from "@ashara/db";
 import type { GitRunner, ProcessRunner } from "@ashara/execution-infra";
 import { NoLLMProvidersConfigured } from "@ashara/model-access";
 import type { LanguageModelFactory } from "@ashara/model-access";
@@ -62,7 +62,7 @@ let template = "";
 let workdir = "";
 let savedEnv = new Map<string, string | undefined>();
 let database: RunDatabase | null = null;
-let observer: ReturnType<typeof createDb> | null = null;
+let observer: Database | null = null;
 let masterKey: MasterKey;
 let secrets: SecretStore;
 /** Pools composeAshara opened; it does not close them when it throws. */
@@ -108,7 +108,7 @@ afterEach(async () => {
   database = null;
 });
 
-function db(): ReturnType<typeof createDb> {
+function db(): Database {
   if (observer === null) throw new NoTestDatabase("db()");
   return observer;
 }

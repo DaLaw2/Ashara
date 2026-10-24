@@ -8,6 +8,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { EnvironmentBuildRepository } from "@ashara/execution-infra";
 import {
   EnvironmentBuildFailed,
@@ -28,7 +29,7 @@ const run = promisify(execFile);
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 let db: Db;
 let builds: EnvironmentBuildRepository;
 let projectId: ProjectId;

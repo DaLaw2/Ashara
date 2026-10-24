@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { BurnWarnings, listProjectBurns, postBurnWarning, readRiskRecords } from "@ashara/engagement";
@@ -21,7 +22,7 @@ const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 // 20 requests with a 25% reserve: 5 set aside, 15 the project's work may draw; yellow from 8, red from 12.
 const BUDGETS = { perTaskRequests: 50, perProjectRequests: 20, verificationReservePercent: 25 };
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

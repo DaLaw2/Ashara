@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { TaskCheckRepository } from "@ashara/quality";
 import { parseProjectId, parseWorkItemId } from "@ashara/shared";
 
@@ -13,7 +14,7 @@ import { parseProjectId, parseWorkItemId } from "@ashara/shared";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `hold-evidence-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let repo: TaskCheckRepository;
 let clientId: string;
 let projectId: string;

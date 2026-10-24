@@ -24,6 +24,7 @@ import { createPlanReportStore } from "@ashara/server/plan-report-store";
 import { projectState } from "../simulator/project-state.js";
 import { citingItemsToCheck } from "../simulator/stand-ins/planner.js";
 import { haltReportsOf } from "./terminal-reports.js";
+import type { HaltReports } from "./terminal-reports.js";
 
 // The plan revision suites' shared fixture. Every row a suite writes belongs to a project it
 // creates under a unique name, and its afterAll deletes exactly those rows. Each store is narrowed
@@ -153,7 +154,7 @@ const ItemRowSchema = z.object({
 
 /** What the suite's hooks set up and its helpers read; the database, gateway and client exist once beforeAll has run. */
 interface SuiteFixture {
-  readonly db: ReturnType<typeof createDb>;
+  readonly db: Database;
   readonly gateway: GuardedModelAccess;
   readonly clientId: string;
   readonly namePrefix: string;
@@ -164,7 +165,7 @@ interface SuiteFixture {
 }
 
 /** The gateway every suite call goes through: one stub provider, priced by the suite's ledger under caps no test reaches. */
-function suiteGateway(db: ReturnType<typeof createDb>): GuardedModelAccess {
+function suiteGateway(db: Database): GuardedModelAccess {
   const TEST_SPEND_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
   return new GuardedModelAccess(buildGateway({
     models: sdkLanguageModels,
@@ -191,7 +192,7 @@ function suiteGateway(db: ReturnType<typeof createDb>): GuardedModelAccess {
 }
 
 /** Deletes every row the suite wrote: its projects' rows, replies before what they reply to, then the projects and the client. */
-async function deleteSuiteRows(db: ReturnType<typeof createDb>, namePrefix: string, clientId: string): Promise<void> {
+async function deleteSuiteRows(db: Database, namePrefix: string, clientId: string): Promise<void> {
   const pattern = `${namePrefix}%`;
   const projects = sql`SELECT id FROM projects WHERE name LIKE ${pattern}`;
   await db.execute(sql`DELETE FROM correction_holds WHERE project_id IN (${projects})`);
@@ -265,7 +266,7 @@ function planReports(f: SuiteFixture): PlanReports {
 }
 
 /** The Liaison's halt and resumption reports over this suite's projects, each halt's terminal sweep recorded first, as the core loop orders them. */
-function blockReports(f: SuiteFixture): ReturnType<typeof haltReportsOf> {
+function blockReports(f: SuiteFixture): HaltReports {
   return haltReportsOf(f.db, (projectId) => f.ourProjects.has(projectId));
 }
 
@@ -323,7 +324,7 @@ async function contradict(
   return row.id;
 }
 
-async function itemsOf(db: ReturnType<typeof createDb>, projectId: ProjectId) {
+async function itemsOf(db: Database, projectId: ProjectId) {
   const result = await db.execute(sql`
     SELECT id, title, level, status, task_spec->>'origin' AS origin, blocked_reason AS reason
     FROM work_items WHERE project_id = ${projectId} ORDER BY created_at, id`);
@@ -331,7 +332,7 @@ async function itemsOf(db: ReturnType<typeof createDb>, projectId: ProjectId) {
 }
 
 /** Starts a task as dispatch does: the task and every Pending ancestor, its Epic, go InProgress. */
-async function startTask(db: ReturnType<typeof createDb>, id: string): Promise<void> {
+async function startTask(db: Database, id: string): Promise<void> {
   const repo = adaptWorkItemRepo(new WorkItemRowRepository(db));
   const task = await PlanningService.findWorkItem(repo, parseWorkItemId(id, "test"));
   if (task === null) throw new ReplanSuiteFixtureError(`task ${id} not found`);
@@ -341,17 +342,17 @@ async function startTask(db: ReturnType<typeof createDb>, id: string): Promise<v
 }
 
 /** Completes a started task as its routed success does, settling its Epic when every child is done. */
-async function completeTask(db: ReturnType<typeof createDb>, id: string): Promise<void> {
+async function completeTask(db: Database, id: string): Promise<void> {
   await PlanningService.route(adaptWorkItemRepo(new WorkItemRowRepository(db)), parseWorkItemId(id, "test"), "passed");
 }
 
-async function dependenciesOf(db: ReturnType<typeof createDb>, id: string): Promise<string[]> {
+async function dependenciesOf(db: Database, id: string): Promise<string[]> {
   const result = await db.execute(sql`SELECT to_id AS "to" FROM dependencies WHERE from_id = ${id}`);
   return z.array(z.object({ to: z.string() })).parse(result.rows).map((row) => row.to);
 }
 
 /** The project's status and category, and the client messages whose correction's revision it awaits (correction_holds), oldest first. */
-async function projectRow(db: ReturnType<typeof createDb>, projectId: ProjectId) {
+async function projectRow(db: Database, projectId: ProjectId) {
   const result = await db.execute(sql`
     SELECT ${projectState} AS status, (SELECT b.kind FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "category",
       COALESCE((SELECT json_agg(ch.requested_by ORDER BY ch.created_at) FROM correction_holds ch
@@ -364,7 +365,7 @@ async function projectRow(db: ReturnType<typeof createDb>, projectId: ProjectId)
   return row;
 }
 
-async function reportsOf(db: ReturnType<typeof createDb>, projectId: ProjectId) {
+async function reportsOf(db: Database, projectId: ProjectId) {
   return (await new ClientMessageRepository(db).listByProject(projectId)).filter((m) => m.kind === "report");
 }
 
@@ -427,7 +428,7 @@ export function replanStoreSuite(stub: { model: unknown }) {
     pipelineModel: (options?: PipelineAnswers) => pipelineModel(fixture, options),
     replanner: (containment?: StepContainment) => replanner(fixture, containment),
     planReports: () => planReports(fixture),
-    blockReports: (): ReturnType<typeof haltReportsOf> => blockReports(fixture),
+    blockReports: (): HaltReports => blockReports(fixture),
     plannedProject: (options?: Parameters<typeof plannedProject>[1]) => plannedProject(fixture, options),
     contradict: (projectId: ProjectId, questionId: string, change?: Parameters<typeof contradict>[3]) => contradict(fixture, projectId, questionId, change),
     itemsOf: (projectId: ProjectId) => itemsOf(db, projectId),

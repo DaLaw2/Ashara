@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ConfigRepository } from "@ashara/model-access";
 import { measureCost } from "@ashara/finance";
 import {
@@ -28,7 +29,7 @@ import type { LanguageModelFactory } from "@ashara/model-access";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const MODEL_ID = `catalog-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let repo: ConfigRepository;
 
 beforeAll(() => {

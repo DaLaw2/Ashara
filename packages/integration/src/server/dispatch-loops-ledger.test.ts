@@ -10,6 +10,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { CoreLoop, DEFAULT_CONFIG, FailureRouter, adaptWorkItemRepo, reconcileWorkItemsOnStartup, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import type { WorkItemRepository } from "@ashara/delivery";
@@ -55,7 +56,7 @@ const MODEL: ModelConfig = {
   priceWindows: [], priceTiers: [], datedPrices: [],
 };
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 let db: Db;
 let root = "";
 const run = promisify(execFile);

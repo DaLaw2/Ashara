@@ -3,6 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { CoreLoop, DEFAULT_CONFIG, ProjectHaltRepository } from "@ashara/delivery";
 import { idleProjectRepo, inertWorkItemRepo } from "@ashara/delivery/testing";
 import type { CoreLoopDeps } from "@ashara/delivery";
@@ -62,7 +63,7 @@ const budgetCap = {
   spend: { capUsd: 1, spentUsd: 0.5, inFlightUsd: 0, nextCallUsd: 0.6 },
 } as const;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

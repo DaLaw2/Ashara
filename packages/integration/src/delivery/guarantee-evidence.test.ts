@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { CoreLoop, DEFAULT_CONFIG, ProjectHaltRepository, runAcceptanceSweeps } from "@ashara/delivery";
 import { idleProjectRepo, inertWorkItemRepo } from "@ashara/delivery/testing";
 import type { CoreLoopDeps } from "@ashara/delivery";
@@ -51,7 +52,7 @@ const VISION: Parameters<VisionRepository["create"]>[1] = {
   },
 };
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

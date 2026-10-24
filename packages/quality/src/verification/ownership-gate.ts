@@ -7,6 +7,7 @@ import { PostMergeEnvironmentMissing, asharaBlocked, substrateBlocked } from "..
 import type { ExecutionEventSink, ExecutionResult, VerifiedDispatch } from "../dispatch-result.js";
 import { environmentErrorOf, VerificationInfrastructureFault } from "../fault-class.js";
 import { checkBranchOwnership } from "../gates/ownership.js";
+import type { OwnershipVerdict } from "../gates/ownership.js";
 import { discardTaskBranch, taskBranchName } from "../merge.js";
 import type { TaskCheckStore } from "../task-checks.js";
 import { WORK_FAILED } from "../task-verdict.js";
@@ -47,7 +48,7 @@ export class OwnershipGate {
       const chain = wrapError("development", "ownershipGate", fault, { taskId: task.id, errorClass: fault.name });
       return asharaBlocked({ task, sessionId, stage: "ownershipGate", fault, agent: { outcome, agentWork: "kept" }, eventSink, logger: this.deps.logger, chain });
     };
-    let verdict: Awaited<ReturnType<typeof checkBranchOwnership>>;
+    let verdict: OwnershipVerdict;
     try {
       // Fail closed: a task dispatched without an environment has no recipe to fence and no
       // rebuild to accept an input change against.

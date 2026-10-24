@@ -7,6 +7,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ClientAnswers, ClientMessageRepository, TenderIntake, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, IntakeStore } from "@ashara/engagement";
 import { GuardedModelAccess, LlmCallLedger, LlmCallRepository, SpendCap } from "@ashara/finance";
@@ -55,7 +56,7 @@ const TENDER = "A key store. Clients put and get keys. A deleted key is gone.";
 const MERGE = "0123456789abcdef0123456789abcdef01234567";
 const QUESTION = "The tender says the store starts with its fixed command, which cannot serve deletes; may the start command change?";
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 let workdirBase: string;

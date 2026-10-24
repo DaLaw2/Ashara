@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { loadLintContext, type LintContext, type PackageScan } from "./lint.js";
@@ -80,9 +82,61 @@ describe("mirrored-types", () => {
     const violations = mirroredTypes(packagesTree({ server: { "store.ts": alias, "local.ts": local } })).filter((v) => v.line > 0);
     expect(violations.map((v) => `${v.file}:${v.line}`)).toEqual(["packages/server/src/store.ts:3", "packages/server/src/store.ts:4"]);
     expect(violations.map((v) => v.reason)).toEqual([
-      expect.stringContaining('an alias of what createDb, imported from "@ashara/db", returns'),
-      expect.stringContaining('an alias of what config.loadServerConfig, imported from "./config.js", returns'),
+      expect.stringContaining('a type written over what createDb, imported from "@ashara/db", returns'),
+      expect.stringContaining('a type written over what config.loadServerConfig, imported from "./config.js", returns'),
     ]);
+  });
+
+  test("a return type of an imported function awaited, indexed, wrapped or written inline is a violation", () => {
+    const forms = [
+      'import { createDb } from "@ashara/db";',
+      'import { lastReport, openMessages, mergeOf, findOne } from "./reads.js";',
+      "type Last = Awaited<ReturnType<typeof lastReport>>;",
+      "type Open = Awaited<ReturnType<typeof openMessages>>[number];",
+      'type Failed = Extract<Awaited<ReturnType<typeof mergeOf>>, { readonly status: "error" }>;',
+      "export function handle(db: ReturnType<typeof createDb>): ReturnType<typeof createDb> { return db; }",
+      "export interface Holder { readonly db: ReturnType<typeof createDb>; readonly found: NonNullable<ReturnType<typeof findOne>>[\"row\"] }",
+      "export function read(): void { let found: ReturnType<typeof findOne> | null = null; void found; }",
+    ].join("\n");
+    expect(found({ server: { "forms.ts": forms } })).toEqual([
+      "packages/server/src/forms.ts:3",
+      "packages/server/src/forms.ts:4",
+      "packages/server/src/forms.ts:5",
+      "packages/server/src/forms.ts:6",
+      "packages/server/src/forms.ts:6",
+      "packages/server/src/forms.ts:7",
+      "packages/server/src/forms.ts:7",
+      "packages/server/src/forms.ts:8",
+    ]);
+  });
+
+  test("a return type of a local function, a global or a Node built-in is clean", () => {
+    const clean = [
+      'import { lstat } from "node:fs/promises";',
+      "function rows() { return [1]; }",
+      "export function read(): void {",
+      "  let timer: ReturnType<typeof setTimeout> | undefined;",
+      "  let entry: Awaited<ReturnType<typeof lstat>> | undefined;",
+      "  const kept: Awaited<ReturnType<typeof rows>>[number] | undefined = undefined;",
+      "  void [timer, entry, kept];",
+      "}",
+    ].join("\n");
+    expect(found({ server: { "clean.ts": clean } })).toEqual([]);
+  });
+
+  test("a return type of an imported function in scripts/ is a violation, and a scan of no script fails closed", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mirrored-types-"));
+    try {
+      fs.mkdirSync(path.join(root, "scripts", "lints"), { recursive: true });
+      fs.writeFileSync(path.join(root, "scripts", "lints", "reader.ts"), 'import { readImports } from "./source-files.js";\nexport function check(ref: ReturnType<typeof readImports>[number]): void { void ref; }\n');
+      fs.writeFileSync(path.join(root, "scripts", "lints", "reader.test.ts"), 'import { readImports } from "./source-files.js";\nexport type Ref = ReturnType<typeof readImports>;\n');
+      const context = { ...packagesTree({ quality: { "a.ts": "export type One = string;\n" } }), root };
+      expect(mirroredTypes(context).filter((v) => v.line > 0).map((v) => `${v.file}:${v.line}`)).toEqual(["scripts/lints/reader.ts:2"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    const reasons = mirroredTypes(packagesTree({ quality: { "a.ts": "export type One = string;\n" } })).map((v) => v.reason);
+    expect(reasons).toContainEqual(expect.stringContaining("no script to scan"));
   });
 
   test("two members in common, a union alias, a test and an import of the one declaration are clean", () => {
@@ -139,7 +193,21 @@ describe("mirrored-types", () => {
   test("restoring a server adapter's alias of the database handle fails the repository", () => {
     const restored = 'import type { createDb } from "@ashara/db";\ntype Db = ReturnType<typeof createDb>;\nexport const handle = (db: Db): Db => db;\n';
     const violations = mirroredTypes(withRestored({ server: { "restored-store.ts": restored } }));
-    expect(violations.map((v) => `${v.file}:${v.line} ${v.reason}`)).toEqual([expect.stringMatching(/^packages\/server\/src\/restored-store\.ts:2 an alias of what createDb, imported from "@ashara\/db", returns/)]);
+    expect(violations.map((v) => `${v.file}:${v.line} ${v.reason}`)).toEqual([expect.stringMatching(/^packages\/server\/src\/restored-store\.ts:2 a type written over what createDb, imported from "@ashara\/db", returns/)]);
+  });
+
+  test("restoring a joined type written over an imported function's return fails the repository", () => {
+    const restored = [
+      'import type { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";',
+      'import { sweepOrphanedWorktrees } from "@ashara/execution-infra";',
+      "export type RestoredLastReport = Awaited<ReturnType<typeof lastReportGuaranteeVerdictsOf>>;",
+      "export const sweep = (base: string): ReturnType<typeof sweepOrphanedWorktrees> => sweepOrphanedWorktrees(base, async () => []);",
+    ].join("\n");
+    const violations = mirroredTypes(withRestored({ evaluation: { "restored-report.ts": restored } }));
+    expect(violations.map((v) => `${v.file}:${v.line} ${v.reason}`)).toEqual([
+      expect.stringMatching(/^packages\/evaluation\/src\/restored-report\.ts:3 a type written over what lastReportGuaranteeVerdictsOf, imported from "@ashara\/engagement", returns/),
+      expect.stringMatching(/^packages\/evaluation\/src\/restored-report\.ts:4 a type written over what sweepOrphanedWorktrees, imported from "@ashara\/execution-infra", returns/),
+    ]);
   });
 
   test("the repository declares each type of its production source once, or names the pair with why", () => {

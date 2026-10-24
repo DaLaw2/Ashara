@@ -5,7 +5,7 @@
 
 import { z } from "zod";
 import { isCheckOrigin, isEnvironmentChangeOrigin, isGoalTask } from "@ashara/delivery/predicates";
-import type { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";
+import type { LastTerminalReport } from "@ashara/engagement";
 import type { ReviewerRecordLine, StoredClaim, StoredJudgement } from "@ashara/quality";
 import type { JudgedVerdict, Overall } from "./hidden-verdict.js";
 import type { MappingFile, PacketKey } from "./pool-mapping.js";
@@ -608,9 +608,6 @@ const storedGuaranteeVerdictSchema = z.discriminatedUnion("verdict", [
   z.strictObject({ ...storedVerdictFields, verdict: z.literal("unjudged"), reason: z.string().min(1) }),
 ]);
 export type StoredGuaranteeVerdict = z.output<typeof storedGuaranteeVerdictSchema>;
-
-/** The project's last terminal report as the database holds it: none, one carrying no verdict rows, or one with its rows unparsed. */
-type LastTerminalReport = Awaited<ReturnType<typeof lastReportGuaranteeVerdictsOf>>;
 
 /**
  * Ashara's per-guarantee verdicts: those its last terminal report carries; or that its last terminal report carries

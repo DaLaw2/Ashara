@@ -1,6 +1,7 @@
 import type { WorkItemRepository } from "@ashara/delivery";
 import { OPEN_WORK_ITEM_STATUSES } from "@ashara/delivery/work-item";
 import { sweepOrphanedWorktrees } from "@ashara/execution-infra";
+import type { WorktreeSweep } from "@ashara/execution-infra";
 
 /**
  * The reader of the task ids whose worktree the startup sweep keeps: every open task, since any of
@@ -12,6 +13,6 @@ function keptWorktreeTaskIds(workItemRepo: Pick<WorkItemRepository, "listIdsBySt
 }
 
 /** The one sweep of task worktrees at boot: each one under `workdirBase` no open task of Delivery's work items keeps is removed. */
-export function sweepWorktreesAtStartup(workdirBase: string, workItemRepo: Pick<WorkItemRepository, "listIdsByStatus">): ReturnType<typeof sweepOrphanedWorktrees> {
+export function sweepWorktreesAtStartup(workdirBase: string, workItemRepo: Pick<WorkItemRepository, "listIdsByStatus">): Promise<WorktreeSweep> {
   return sweepOrphanedWorktrees(workdirBase, keptWorktreeTaskIds(workItemRepo));
 }

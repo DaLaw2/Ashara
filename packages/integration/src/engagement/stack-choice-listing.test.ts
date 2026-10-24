@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, createPgPool, resolveTestDatabaseUrl } from "@ashara/db";
-import type { PoolFactory } from "@ashara/db";
+import type { PoolFactory, Database } from "@ashara/db";
 import { ClientMessageRepository, StackChoiceReports, VisionRepository, consumeTenderWithoutIntake, createProjectWithTender } from "@ashara/engagement";
 import type { StackChoiceStore } from "@ashara/engagement";
 import { createWorkItemId } from "@ashara/shared";
@@ -48,7 +48,7 @@ const refusingVisionReads: PoolFactory = (config) => {
   });
 };
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

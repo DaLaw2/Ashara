@@ -48,6 +48,7 @@ import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { access } from "node:fs/promises";
 import { DEFAULT_DATABASE_URL, MIGRATIONS_DIR, createDb, runMigrations } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { BlockReports, TERMINAL_KINDS, TerminalReports } from "@ashara/engagement";
 import {
   composedAgain,
@@ -156,7 +157,7 @@ async function restore(dump: string, psql: readonly string[], database: string):
  * on no commit: a dump holds no checkout of the product, and the replay runs nothing on cells.
  * Returns how many were recorded.
  */
-async function recordUnsweptTerminals(db: ReturnType<typeof createDb>): Promise<number> {
+async function recordUnsweptTerminals(db: Database): Promise<number> {
   const store = createTerminalSweepStore(db);
   let recorded = 0;
   for (const due of await store.dueTerminalSweeps()) {

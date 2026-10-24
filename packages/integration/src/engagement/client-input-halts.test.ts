@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import { ClientChanges, ClientMessageRepository, StackChoiceReports, VisionRepository, consumeTenderWithoutIntake, createProjectWithTender, listUnconsumedChanges } from "@ashara/engagement";
@@ -35,7 +36,7 @@ const TENDER = "Build a command that prints a greeting.";
 const LEAVE_OUT_COLOUR = { ops: [{ op: "add-exclusion", text: "Coloured output.", direction: "neutral" }], confirms: [] };
 const STATEMENT = "The command is a POSIX shell script tested with bats.";
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

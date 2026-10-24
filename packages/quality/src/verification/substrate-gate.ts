@@ -1,5 +1,5 @@
 import { cleanupWorkdir } from "@ashara/execution-infra";
-import type { Logger } from "@ashara/shared";
+import type { ErrorLayer, Logger } from "@ashara/shared";
 import { wrapError } from "@ashara/shared";
 import { outcomeRecord } from "@ashara/workplace";
 import type { Outcome } from "@ashara/workplace";
@@ -44,7 +44,7 @@ export class SubstrateGate {
   async substrateGate(d: VerifiedDispatch, statement: string | null, outcome: Outcome): Promise<SubstrateGateOutcome> {
     const { eventSink, attemptPolicy } = this.deps;
     const { task, workDir, targetProjectPath, sessionId } = d;
-    const fail = (summary: string, chain: ReturnType<typeof wrapError>): SubstrateGateOutcome => ({
+    const fail = (summary: string, chain: ErrorLayer): SubstrateGateOutcome => ({
       kind: "ended",
       result: { status: "failed", verdict: WORK_FAILED, detail: summary, outcome, sessionId, attempt: task.attempt, errorEnvelope: { outcome: "failed", summary, chain, agentOutput: outcomeRecord(outcome) } },
     });

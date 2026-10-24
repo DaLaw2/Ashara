@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { PlanningService, WorkItemRowRepository, adaptWorkItemRepo, exitSuiteReview } from "@ashara/delivery";
 import type { ContextualLlm } from "@ashara/finance";
 import { suiteReviewerFor } from "@ashara/quality/testing";
@@ -17,7 +18,7 @@ import type { ProjectId } from "@ashara/shared";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `suite-review-reopen-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 let projectId: ProjectId;
 

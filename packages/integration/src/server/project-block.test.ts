@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
-import type { DbTransaction } from "@ashara/db";
+import type { DbTransaction, Database } from "@ashara/db";
 import { PlanReports } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
 import { reconcileWorkItemsOnStartup, FailureRouter, PlanningService, adaptWorkItemRepo, failWorkItem, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
@@ -26,9 +26,9 @@ import { projectState } from "../simulator/project-state.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `project-block-test-${randomUUID().slice(0, 8)}`;
 
-type Handle = ReturnType<typeof createDb> | DbTransaction;
+type Handle = Database | DbTransaction;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

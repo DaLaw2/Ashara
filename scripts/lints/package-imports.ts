@@ -49,6 +49,7 @@ import {
   matchesAnyGlob,
   shownTarget,
   staticEdges,
+  type ImportRef,
 } from "./source-files.js";
 import { checkStandIns } from "./stand-ins.js";
 
@@ -201,7 +202,7 @@ function checkNamedOnlyRelatives(scan: FileScan): void {
 }
 
 /** One cross-package import held to the matrix: the target's importers, the allow list, restrict, subpaths and entries. */
-function checkImport(scan: FileScan, ref: ReturnType<typeof extractAsharaImports>[number]): void {
+function checkImport(scan: FileScan, ref: ImportRef): void {
   const { context, pkg, filePath, pkgRelative, violations } = scan;
   const { rules } = context;
   const { name: pkgName, rule } = pkg;

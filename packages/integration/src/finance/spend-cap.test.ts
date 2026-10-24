@@ -4,6 +4,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { BudgetExceeded, GuardedModelAccess, LlmCallLedger, SpendCap, worstCaseCostUsd } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
@@ -21,7 +22,7 @@ const NONCE = randomUUID().slice(0, 8);
 const NAME = `spend-cap-test-${NONCE}`;
 const LARGE = 1e6;
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 type ProjectId = Awaited<ReturnType<ProjectRepository["create"]>>["id"];
 let db: Db;
 let calls: LlmCallRepository;

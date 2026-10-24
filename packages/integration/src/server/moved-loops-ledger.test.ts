@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { BlockReports, ClientAnswers, TenderIntake, ClientMessageRepository, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, BlockReportStore, IntakeStore, LiaisonAnswers } from "@ashara/engagement";
@@ -52,7 +53,7 @@ const AMPLE_CAPS = { deploymentUsd: 1_000_000, perProjectUsd: 1_000_000 };
 const HEADROOM = 3;
 const MAX_CYCLES = 10;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let setupGateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

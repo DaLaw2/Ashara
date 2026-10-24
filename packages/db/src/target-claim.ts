@@ -31,7 +31,7 @@ class TargetCheckoutClaimLost extends Error {
   }
 }
 
-interface TargetCheckoutClaims {
+export interface TargetCheckoutClaims {
   /** Ends the claims' session, which releases every claim. */
   release(): Promise<void>;
 }

@@ -52,7 +52,7 @@ import { describeErrorChain, JsonParseFailed, parseJson, parseProjectId, type Pr
 import type { JudgedVerdict } from "./hidden-verdict.js";
 import { armSchema, type MappingFile, PoolMappingRefused, realPathOf, refuseInsideGitTree } from "./pool-mapping.js";
 import { poolDirOf, recordedPick, type PickRecord } from "./pool-selection.js";
-import { readRunEvidence } from "./run-evidence.js";
+import { readRunEvidence, type CallTotals } from "./run-evidence.js";
 import { readHidden, readMapping, type ReadMapping } from "./run-report-inputs.js";
 import { type AsharaGuarantees, asharaClaim, asharaGuaranteesOf, type StoredGuaranteeVerdict } from "./run-report-format.js";
 
@@ -475,7 +475,7 @@ function evidenceOf(rows: readonly StoredGuaranteeVerdict[]): string {
  * in flight, of an unknown provider, or any one call unmeasured with no estimate refuses.
  * @testseam trust-ledger.test.ts checks one unestimated call among estimated ones refuses
  */
-export function spendOf(run: string, calls: Awaited<ReturnType<typeof readRunEvidence>>["calls"]): PairRow["spend"] {
+export function spendOf(run: string, calls: readonly CallTotals[]): PairRow["spend"] {
   const spend = { claudeUsd: 0, deepseekUsd: 0 };
   for (const call of calls) {
     const field = SPEND_FIELDS.get(call.provider);

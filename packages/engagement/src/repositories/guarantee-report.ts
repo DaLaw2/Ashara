@@ -4,6 +4,7 @@ import { visionDocuments, visionRevisions } from "@ashara/db/schema/engagement";
 import type { DbHandle } from "@ashara/db";
 import { recordedSweep } from "@ashara/quality/published-reads";
 import { GuaranteeEvidenceMismatch, GuaranteeEvidenceUnreadable, guaranteeVerdictsOf, recordReportVerdicts, reportVerdicts, sweepEvidenceVersion } from "@ashara/quality/published-verdicts";
+import type { StoredReportVerdict } from "@ashara/quality/published-verdicts";
 import { StoredRevisionOpsSchema } from "../vision-language/contract-op.js";
 import { VisionUnreadable, readVisionVersion } from "../vision.js";
 import type { VisionVersion } from "../vision.js";
@@ -95,12 +96,18 @@ async function guaranteeRecordsOf(db: DbHandle, sweepId: string): Promise<Guaran
   return { kind: "judged", sweep: judged, vision, judged: verdicts, revisions };
 }
 
+/** The project's last terminal report as the database holds it: none, one carrying no verdict rows, or one with its rows unparsed. */
+export type LastTerminalReport =
+  | { readonly kind: "no-terminal-report" }
+  | { readonly kind: "no-verdicts"; readonly reportId: string }
+  | { readonly kind: "verdicts"; readonly reportId: string; readonly rows: readonly StoredReportVerdict[] };
+
 /**
  * The verdict rows the project's last terminal report carries, as stored and unparsed; that the last terminal report
  * carries none (its table judged nothing: no contract, or records that did not read), never an older report's rows in
  * its place; or that the project has no terminal report.
  */
-export async function lastReportGuaranteeVerdictsOf(db: DbHandle, projectId: string) {
+export async function lastReportGuaranteeVerdictsOf(db: DbHandle, projectId: string): Promise<LastTerminalReport> {
   const reportId = await lastTerminalReportId(db, projectId);
   if (reportId === null) return { kind: "no-terminal-report" } as const;
   const rows = await reportVerdicts(db, reportId);

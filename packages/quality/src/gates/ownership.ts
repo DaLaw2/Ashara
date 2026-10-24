@@ -24,7 +24,7 @@ class OwnershipDiffFailed extends Error {
   }
 }
 
-type OwnershipVerdict =
+export type OwnershipVerdict =
   | { readonly kind: "clean" }
   /**
    * Only recipe files were changed: the work needs an environment change, which the platform role

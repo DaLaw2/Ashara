@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository } from "@ashara/delivery";
 import type { Clock, ProjectId } from "@ashara/shared";
 import { createTerminalReportStore } from "@ashara/server/terminal-report-store";
@@ -16,7 +17,7 @@ const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `delivered-retry-clock-test-${randomUUID().slice(0, 8)}`;
 const T0 = Date.UTC(2001, 0, 1);
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 const ourProjects = new Set<string>();
 

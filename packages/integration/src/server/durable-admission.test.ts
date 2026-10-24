@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { GuardedModelAccess, LlmCallLedger, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
@@ -33,7 +34,7 @@ const MODEL: ModelConfig = {
   priceTiers: [], datedPrices: [],
 };
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 let db: Db;
 let calls: LlmCallRepository;
 let projects: ProjectRepository;

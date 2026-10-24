@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/delivery";
@@ -166,7 +166,7 @@ export async function readTextFactRecords(
   projectId: string,
   checkout: string | null,
 ): Promise<TextFactRecords> {
-  const rows = async <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>): Promise<T[]> =>
+  const rows = async <T>(schema: z.ZodType<T>, query: SQL): Promise<T[]> =>
     z.array(schema).parse((await db.execute(query)).rows);
   const records = await readStoreRecords(rows, projectId);
   if (checkout === null) {
@@ -185,7 +185,7 @@ export async function readTextFactRecords(
   };
 }
 
-type Rows = <T>(schema: z.ZodType<T>, query: ReturnType<typeof sql>) => Promise<T[]>;
+type Rows = <T>(schema: z.ZodType<T>, query: SQL) => Promise<T[]>;
 
 async function readStoreRecords(
   rows: Rows,

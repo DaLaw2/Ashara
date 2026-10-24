@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { type AppendOptions, appendRun, LedgerPathRefused, MappingDigestMismatch, PoolMappingRefused, readTrustLedger } from "@ashara/evaluation";
 import { parseProjectId, type ProjectId } from "@ashara/shared";
 
@@ -24,7 +25,7 @@ const DIGEST = `sha256:${"b".repeat(64)}`;
 const SEED = "c".repeat(64);
 const RUN = "r1";
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 let db: Db;
 let projectId: ProjectId;
 let work: string;

@@ -5,6 +5,7 @@ export type { Database, DbHandle, DbTransaction, PoolFactory } from "./connectio
 export type { PgListener } from "./listener.js";
 export { listenForEvents } from "./listener.js";
 export { TargetCheckoutClaimedElsewhere, claimTargetCheckouts } from "./target-claim.js";
+export type { TargetCheckoutClaims } from "./target-claim.js";
 export { insertedRow } from "./inserted-row.js";
 export { qualifiedColumn } from "./qualified-column.js";
 export { isDatabaseConnectionFault } from "./connection-fault.js";

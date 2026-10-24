@@ -5,6 +5,7 @@ import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 import { ClientRepository, createDb, EventStoreRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { ClientChanges, ClientMessageRepository, TenderIntake, VisionRepository, createProjectWithTender } from "@ashara/engagement";
 import type { ClientChangeStore, IntakeStore } from "@ashara/engagement";
@@ -52,7 +53,7 @@ const NAME_PREFIX = `correction-test-${randomUUID().slice(0, 8)}`;
 const TENDER = "A key store. Clients put and get keys. A deleted key is gone.";
 const AMENDED_G2 = "A deleted key is gone, and getting it prints that it was deleted.";
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let gateway: GuardedModelAccess;
 let clientId: string;
 const ourProjects = new Set<string>();

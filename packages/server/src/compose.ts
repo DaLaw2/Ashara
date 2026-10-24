@@ -18,7 +18,7 @@ import { LlmCallRepository } from "@ashara/finance";
 import { ConfigRepository } from "@ashara/model-access";
 import { latestRosterRevision, latestRosterRoles } from "@ashara/organization/roster";
 import { SecretRepository } from "@ashara/security";
-import type { Database, PoolFactory } from "@ashara/db";
+import type { Database, PoolFactory, TargetCheckoutClaims } from "@ashara/db";
 import { KnowledgeRepository, FailedApproachRepository } from "@ashara/knowledge";
 import type { KnowledgeSink, KnowledgeSource } from "@ashara/knowledge";
 import {
@@ -34,7 +34,7 @@ import {
   reconcileWorkItemsOnStartup,
   stepContainment,
 } from "@ashara/delivery";
-import type { AgentStaffing, CycleRunner, TaskLanes, WorkItemRepository } from "@ashara/delivery";
+import type { AgentStaffing, CycleRunner, DispatchService, TaskLanes, WorkItemRepository } from "@ashara/delivery";
 import {
   VisionRepository,
   ClientMessageRepository,
@@ -92,8 +92,9 @@ import { loadWebClientAssets } from "./web-client.js";
 import { createSuiteReviewSource, createTaskCheckStore } from "./task-check-store.js";
 import { reconcileOrRefuse } from "./fail-closed.js";
 import { createEventLog } from "./event-log.js";
+import type { EventLog } from "./event-log.js";
 import { cellPortsOf, composeCoreLoopDeps, composeDispatchService, composeSweepers } from "./compose-core-loop.js";
-import type { DispatchComposition } from "./compose-core-loop.js";
+import type { DispatchComposition, MainSweepers } from "./compose-core-loop.js";
 
 // Policy defaults for the web client's sessions. A session lasts a
 // working day; a failed login answers one second after it arrived.
@@ -188,7 +189,6 @@ export function composeAshara(ports: AsharaPorts): Promise<AsharaInstance> {
   // join it rather than the logger's root trace, which no scope minted.
   return logger.scope({ trace: "new" }, () => composeInBoot(ports, logger, AsyncLocalStorage.snapshot()));
 }
-
 
 async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T>(work: () => T) => T): Promise<AsharaInstance> {
   const { masterKey, databaseUrl } = ports;
@@ -307,7 +307,7 @@ function composeDispatch(deps: {
   readonly shutdownSignal: AbortSignal;
   readonly clock: Clock;
   readonly logger: Logger;
-}): { readonly dispatchService: ReturnType<typeof composeDispatchService>; readonly sweepers: ReturnType<typeof composeSweepers> } {
+}): { readonly dispatchService: DispatchService; readonly sweepers: MainSweepers } {
   const { db, config, cells, eventLog, ladderAttemptSink, modelCalls, repos, shutdownSignal, clock, logger } = deps;
   const devEventSink: ExecutionEventSink = {
     emit: (event) => eventLog.emit(event),
@@ -365,14 +365,14 @@ function composeRunner(deps: {
   readonly config: ServerConfig;
   readonly ports: Pick<AsharaPorts, "clock" | "git" | "taskLanes">;
   readonly logger: Logger;
-  readonly eventLog: ReturnType<typeof createEventLog>;
+  readonly eventLog: EventLog;
   readonly ladderAttemptSink: (attempt: LadderAttemptEvent) => void;
   readonly modelCalls: GuardedModelAccess;
   readonly spendCap: SpendCap;
   readonly failureRouter: FailureRouter;
   readonly shutdownSignal: AbortSignal;
-  readonly dispatchService: ReturnType<typeof composeDispatchService>;
-  readonly sweepers: ReturnType<typeof composeSweepers>;
+  readonly dispatchService: DispatchService;
+  readonly sweepers: MainSweepers;
   readonly cells: ComposedCells;
 }): ContinuousRunner {
   const { db, config, ports, logger, eventLog, ladderAttemptSink, modelCalls, spendCap, failureRouter, shutdownSignal, dispatchService, sweepers, cells } = deps;
@@ -690,7 +690,7 @@ function startupOf(deps: {
   const { databaseUrl, workdirBase, logger, abortController, repos, cells } = deps;
   const { workItemRepo, projectRepo, devSessionRepo } = repos;
   // Taken by startup(), held until closeDatabase().
-  let targetClaims: Awaited<ReturnType<typeof claimTargetCheckouts>> | null = null;
+  let targetClaims: TargetCheckoutClaims | null = null;
   const run = (): Promise<void> => logger.scope({ trace: "new" }, () => withGitRunner(deps.git, async () => {
     // One process drives a target: the checkout lock that serialises its finalizes is
     // in-process only, so the claim is taken in the database before anything touches a target,

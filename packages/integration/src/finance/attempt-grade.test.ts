@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { attemptGrade } from "@ashara/finance";
 import { TaskCheckRepository } from "@ashara/quality";
 
@@ -18,7 +19,7 @@ const SUFFIX = randomUUID().slice(0, 8);
 /** Graded Medium with thinking on and Strong with thinking off, catalogued under the deepseek provider only. */
 const MODEL = `attempt-grade-test-${SUFFIX}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 let projectId: string;
 

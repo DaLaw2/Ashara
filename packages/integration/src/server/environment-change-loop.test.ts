@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { EnvironmentBuildRepository } from "@ashara/execution-infra";
 import { LlmCallRepository } from "@ashara/finance";
 import { DevSessionRepository } from "@ashara/workplace";
@@ -83,7 +84,7 @@ const DEFINITION = [
   "",
 ].join("\n");
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 let db: Db;
 let root = "";
 let base: BaseCellReference;

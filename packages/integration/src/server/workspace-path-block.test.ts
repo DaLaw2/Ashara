@@ -6,6 +6,7 @@ import { MockLanguageModelV4 } from "ai/test";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { LlmCallRepository } from "@ashara/finance";
 import { CoreLoop, DEFAULT_CONFIG, FailureRouter, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
 import { PodmanSubstrate } from "@ashara/execution-infra";
@@ -29,7 +30,7 @@ vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `workspace-path-block-test-${randomUUID().slice(0, 8)}`;
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 let db: Db;
 let root = "";
 

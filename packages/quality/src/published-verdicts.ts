@@ -126,8 +126,17 @@ export async function recordReportVerdicts(tx: DbHandle, projectId: string, repo
   );
 }
 
+/** One verdict row a message carries, as stored and unparsed. */
+export interface StoredReportVerdict {
+  readonly reportId: string;
+  readonly guaranteeId: string;
+  readonly verdict: string;
+  readonly reason: string | null;
+  readonly evidenceClass: string;
+}
+
 /** The verdict rows the message `reportId` carries, as stored and unparsed, by guarantee id; none when its table judged nothing. */
-export async function reportVerdicts(db: DbHandle, reportId: string) {
+export async function reportVerdicts(db: DbHandle, reportId: string): Promise<StoredReportVerdict[]> {
   return db
     .select({
       reportId: guaranteeVerdicts.reportId,

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import type * as WorkItemLanguage from "@ashara/delivery/work-item";
 import { OPEN_WORK_ITEM_STATUSES } from "@ashara/delivery/work-item";
 import { createProjectWithTender, VisionRepository } from "@ashara/engagement";
@@ -25,7 +26,7 @@ const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `acceptance-readiness-test-${randomUUID().slice(0, 8)}`;
 const TENDER = "A key store. Clients put and get keys.";
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 
 /** A planned project whose one goal task is Completed, with `other` tasks beside it in the given statuses. */

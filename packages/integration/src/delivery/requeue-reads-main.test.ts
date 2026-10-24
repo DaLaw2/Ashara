@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { CoreLoop, DEFAULT_CONFIG, ProjectHaltRepository, WorkItemRowRepository } from "@ashara/delivery";
 import type { CoreLoopDeps, CoreLoopOverrides, StoredBlockedReason } from "@ashara/delivery";
 import { CellExecInterrupted } from "@ashara/execution-infra";
@@ -23,7 +24,7 @@ import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `requeue-reads-main-test-${randomUUID().slice(0, 8)}`;
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatch"]["dispatchService"]["execute"]>>;
 type Execute = CoreLoopDeps["dispatch"]["dispatchService"]["execute"];
 let db: Db;

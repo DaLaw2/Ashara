@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { ClientRepository, ProjectRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { composedAgain, storedVerdicts } from "./run-state.js";
 
 // The replay's reading of today's reports: which violation keys are about a text composed again, and
@@ -10,7 +11,7 @@ import { composedAgain, storedVerdicts } from "./run-state.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `run-state-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 let projectId: string;
 

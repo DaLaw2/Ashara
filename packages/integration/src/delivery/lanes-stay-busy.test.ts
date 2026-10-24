@@ -6,6 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { CoreLoop, DEFAULT_CONFIG, ProjectHaltRepository, WorkItemRowRepository } from "@ashara/delivery";
 import type { CoreLoopDeps } from "@ashara/delivery";
 import { createWorkItemId } from "@ashara/shared";
@@ -23,7 +24,7 @@ const NAME = `lanes-stay-busy-test-${randomUUID().slice(0, 8)}`;
 const LONG_MS = 1_500;
 const SHORT_MS = 50;
 
-type Db = ReturnType<typeof createDb>;
+type Db = Database;
 let db: Db;
 let root = "";
 

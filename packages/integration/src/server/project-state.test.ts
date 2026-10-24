@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, ProjectRepository, resolveTestDatabaseUrl } from "@ashara/db";
+import type { Database } from "@ashara/db";
 import { ProjectHaltRepository, endHaltOnStop } from "@ashara/delivery";
 import { ClientMessageRepository, acceptProject, recordClientStop } from "@ashara/engagement";
 import type { ProjectId } from "@ashara/shared";
@@ -17,7 +18,7 @@ import { projectState } from "../simulator/project-state.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `project-state-test-${randomUUID().slice(0, 8)}`;
 
-let db: ReturnType<typeof createDb>;
+let db: Database;
 let clientId: string;
 
 const fault = { category: "fault", errorClass: "RecordUnreadable", reason: "a bad record" } as const;

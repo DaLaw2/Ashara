@@ -9,6 +9,7 @@ import type { RevisionRecord } from "../vision-language/contract-op.js";
 import type { HoldCorrection } from "../ports.js";
 import { affectedKeysOf } from "./client-change.js";
 import { LockedStanding, consumeInbound, insertOutboundReport, openAnswerMessages, recordReadingFailure } from "./client-message.js";
+import type { OpenAnswerMessage } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The client's answers to the Liaison's questions: each inbound
@@ -40,8 +41,6 @@ export async function readOpenAnswer(db: DbHandle, answerId: string): Promise<Op
   const [row] = await openAnswerMessages(db, MAX_ANSWER_ATTEMPTS, answerId);
   return row === undefined ? null : openAnswerRow(new VisionRepository(db), row);
 }
-
-type OpenAnswerMessage = Awaited<ReturnType<typeof openAnswerMessages>>[number];
 
 /** One open answer's message, read with its project's current vision. */
 async function openAnswerRow(visions: VisionRepository, row: OpenAnswerMessage): Promise<OpenAnswer> {
