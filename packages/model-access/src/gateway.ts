@@ -853,7 +853,7 @@ function usageOfFailedRequest(error: unknown): ExtractedUsage | null {
 
 /*
  * The provider's wire-format usage, which the AI SDK keeps as `usage.raw` on
- * one response (`asLanguageModelUsage`, ai 7.0.128) and drops when it sums
+ * one response (`asLanguageModelUsage` in the pinned `ai`) and drops when it sums
  * steps. Read by wire format, not by provider name, so every endpoint served
  * through `createOpenAI` reads the same way:
  * - Anthropic Messages: `cache_read_input_tokens`, `cache_creation_input_tokens`.

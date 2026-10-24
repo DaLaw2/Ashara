@@ -85,8 +85,14 @@ function lockMismatches(lock: Lockfile, declared: ReadonlyMap<string, readonly D
   });
 }
 
-function rootDevDependencies(): string[] {
-  return Object.keys(Manifest.parse(readJson("package.json")).devDependencies ?? {});
+/** Every package the lockfile installs, at any depth, by name. */
+function allLockfileDependencyNames(lock: Lockfile = Lockfile.parse(readJson("package-lock.json"))): string[] {
+  const names = new Set<string>();
+  for (const key of Object.keys(lock.packages)) {
+    const at = key.lastIndexOf("node_modules/");
+    if (at !== -1) names.add(key.slice(at + "node_modules/".length));
+  }
+  return [...names];
 }
 
 function escaped(text: string): string {
@@ -151,10 +157,34 @@ describe("dependency versions", () => {
   });
 });
 
-// A comment that pins the toolchain's version goes stale on the next upgrade, which never edits it.
-describe("toolchain versions in comments", () => {
-  test("no comment names a root devDependency at a version", () => {
-    expect(versionedToolComments(trackedFiles(), rootDevDependencies())).toEqual([]);
+// A comment that pins a dependency's version goes stale on the next upgrade, which never edits it.
+describe("dependency versions in comments", () => {
+  test("no comment names any package the lockfile installs at a version", () => {
+    expect(versionedToolComments(trackedFiles(), allLockfileDependencyNames())).toEqual([]);
+  });
+
+  test("the names come from every lockfile entry, nested and scoped ones included, and not from workspace paths", () => {
+    const lock: Lockfile = {
+      packages: {
+        "": {},
+        "node_modules/pg": { version: "8.22.0" },
+        "node_modules/a/node_modules/ai": { version: "7.0.128" },
+        "node_modules/@scope/x": { version: "1.0.0" },
+        "packages/db": {},
+      },
+    };
+    expect(allLockfileDependencyNames(lock).sort()).toEqual(["@scope/x", "ai", "pg"]);
+  });
+
+  test("a runtime dependency's version in a comment is found", () => {
+    const files = new Map([
+      ["a.ts", "// pg 8.22\nexport const a = 1;\n"],
+      ["b.ts", "/* drops when it sums steps (ai 7.0.128) */\nexport const b = 2;\n"],
+    ]);
+    expect(versionedToolComments(files, allLockfileDependencyNames())).toEqual([
+      "a.ts:1: // pg 8.22",
+      "b.ts:1: /* drops when it sums steps (ai 7.0.128) */",
+    ]);
   });
 
   test("a toolchain version in a comment is found, a version in code and another word's number are not", () => {

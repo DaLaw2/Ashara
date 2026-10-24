@@ -26,7 +26,7 @@ export const clientSessions = pgTable("client_sessions", {
   clientId: uuid("client_id")
     .notNull()
     .references(() => clients.id),
-  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  createdAt: timestamptz("created_at").notNull(),
   expiresAt: timestamptz("expires_at").notNull(),
   revokedAt: timestamptz("revoked_at"),
 });
@@ -41,7 +41,7 @@ export const clientLoginFailures = pgTable(
     clientName: text("client_name").notNull(),
     // The attempt's source: an IPv4 address or an IPv6 /64 (Security's sourceNetwork).
     sourceAddress: text("source_address").notNull(),
-    failedAt: timestamptz("failed_at").notNull().defaultNow(),
+    failedAt: timestamptz("failed_at").notNull(),
   },
   (t) => ({
     nameTimeIdx: index("idx_client_login_failures_name_time").on(t.clientName, t.failedAt),

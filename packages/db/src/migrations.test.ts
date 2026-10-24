@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -329,6 +329,34 @@ describe("migrations/ holds one init equal to the numbered files it stands in fo
       ]);
       const settings = await queryOn(fresh, "SELECT to_regclass('public.system_settings') IS NULL AS gone");
       expect(settings.rows).toEqual([{ gone: true }]);
+    });
+  }, 120_000);
+
+  // The repositories write these from the injected clock; a database default would let an insert
+  // that omits one take the database's clock instead.
+  test("a database built from every file refuses an insert that omits a time column the injected clock writes", async () => {
+    await withFreshDatabase("clock", async (fresh) => {
+      await runMigrations(fresh, MIGRATIONS_DIR);
+      const client = await queryOn(fresh, "INSERT INTO clients (name) VALUES ('clock-columns') RETURNING id");
+      const clientId = z.array(z.object({ id: z.string() })).length(1).parse(client.rows)[0]?.id;
+      const omitting = [
+        `INSERT INTO client_sessions (token_hash, client_id, expires_at) VALUES ('${"a".repeat(64)}', '${String(clientId)}', now() + interval '1 hour')`,
+        "INSERT INTO client_login_failures (client_name, source_address) VALUES ('clock-columns', '192.0.2.1')",
+        `INSERT INTO step_faults (step, subject_id, project_id, faults, last_error) VALUES ('s', 'x', '${randomUUID()}', 1, 'e')`,
+      ];
+      const refusals = await Promise.all(
+        omitting.map((statement) =>
+          queryOn(fresh, statement).then(
+            () => "accepted",
+            (e: unknown) => z.object({ code: z.string(), column: z.string() }).parse(e),
+          ),
+        ),
+      );
+      expect(refusals).toEqual([
+        { code: "23502", column: "created_at" },
+        { code: "23502", column: "failed_at" },
+        { code: "23502", column: "retry_at" },
+      ]);
     });
   }, 120_000);
 });

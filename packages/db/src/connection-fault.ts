@@ -1,7 +1,7 @@
 // Whether a failed query failed because the database could not be reached, which a later attempt may
 // not meet, as against anything else (a row that does not parse, a constraint, Ashara's own code),
 // which a retry meets again. Named positively: only a fault recognised here is the connection's, so an
-// error nothing names is never taken for a passing outage. node-postgres (pg 8.22, the pinned version)
+// error nothing names is never taken for a passing outage. node-postgres (the pinned pg)
 // gives its own connection failures no code, only a message; connection-fault.test.ts provokes each
 // kind on a real connection, so an upgrade that renames one fails there.
 
