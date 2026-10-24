@@ -2,14 +2,15 @@ import { execFile, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, testsImportingDirectly, WHOLE_SUITE_RULES, type ChangedPath, type SelectionSources, type WorkspaceLayout } from "./affected-tests.js";
+import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, testsImportingDirectly, WHOLE_SUITE_RULES, workspaceLayout, type ChangedPath, type SelectionSources, type WorkspaceLayout } from "./affected-tests.js";
 
 const REPO = path.join(import.meta.dirname, "..");
 const SCRIPT = path.join(import.meta.dirname, "affected-tests.ts");
 const TSX = path.join(REPO, "node_modules", "tsx", "dist", "cli.mjs");
 
+/** A stub whose batch read is its single-file read, file by file, unless `over` states one. */
 function stubSources(over: Partial<SelectionSources> = {}): SelectionSources {
-  return {
+  const stub: Omit<SelectionSources, "readRevisions"> = {
     allTests: ["packages/a/src/a.test.ts", `${SIMULATOR_DIR}one.test.ts`, `${SIMULATOR_DIR}two.test.ts`, "packages/integration/src/workplace/snap.test.ts"],
     testsImporting: () => Promise.resolve(["packages/a/src/a.test.ts"]),
     filesNaming: () => [],
@@ -18,6 +19,7 @@ function stubSources(over: Partial<SelectionSources> = {}): SelectionSources {
     readRevision: () => undefined,
     ...over,
   };
+  return { readRevisions: (files, side) => new Map(files.map((file) => [file, stub.readRevision(file, side)])), ...stub, ...over };
 }
 
 const modified = (p: string): ChangedPath => ({ path: p, status: "modified" });
@@ -378,6 +380,42 @@ describe("a dependency change", () => {
     expect(selection).toMatchObject({ kind: "whole-suite", capped: false });
   });
 
+  test("a malformed head lockfile is never read for a change that touches no manifest or lockfile", async () => {
+    const reads: string[] = [];
+    const base = sources(lockfile("4.0.0"), "{ not a lockfile");
+    const selection = await selectTests([modified("packages/c/src/plain.ts")], {
+      ...base,
+      readRevision: (file, side) => {
+        reads.push(`${file}@${side}`);
+        return base.readRevision(file, side);
+      },
+      readRevisions: (files, side) => {
+        reads.push(...files.map((file) => `${file}@${side}`));
+        return base.readRevisions(files, side);
+      },
+    });
+    expect(selection.kind).toBe("selected");
+    expect(reads.filter((read) => read.startsWith("package-lock.json"))).toEqual([]);
+  });
+
+  test("a malformed head lockfile fails the selection when a workspace manifest changed", async () => {
+    await expect(selectTests([modified("packages/a/package.json")], sources(lockfile("4.0.0"), "{ not a lockfile"))).rejects.toThrow(/package-lock\.json at the head/);
+  });
+
+  test("the reasons name what the header says they name: each selected workspace, every importer by name, and each file that brings its workspace", async () => {
+    const header = (await readFile(SCRIPT, "utf-8")).replace(/\n \*\s*/g, " ");
+    expect(header).toContain(
+      "The reasons name each selected workspace (in the changed manifest's or lockfile's line), every module and test that imports a changed package by name (in that package's line), and each file whose target no static prefix bounds or whose text cannot be read, with the workspace it brings; the files a workspace holds and the graph dependants are counted in the selection, not named.",
+    );
+    const selection = await selectTests(honoUpgrade, loaderSources("export const load = (target: string) => import(target);\n"));
+    const reasons = selection.reasons.join("\n");
+    expect(reasons).toMatch(/^package-lock\.json: .*selects every test of 2 workspace\(s\) \(packages\/a, packages\/b\)/m);
+    expect(reasons).toContain(`hono: 1 module(s) and test(s) import it by name (${HONO_IMPORTER})`);
+    expect(reasons).toContain(`${DYNAMIC_LOADER}: an import whose target is computed may load any package, so every module and test of workspace packages/c runs`);
+    // Every file a reason names is an importer by name (hono's, and @p/a's whose lockfile entry changed) or the file that brought its workspace.
+    expect(new Set(reasons.match(/[\w./-]+\.(?:ts|mjs|js)\b/g))).toEqual(new Set([HONO_IMPORTER, USES_A, DYNAMIC_LOADER]));
+  });
+
   test("a lockfile not of the npm shape fails the selection", async () => {
     await expect(selectTests([modified("package-lock.json")], sources(lockfile("4.0.0"), '{"packages": []}'))).rejects.toThrow(/package-lock\.json at the head/);
   });
@@ -385,18 +423,48 @@ describe("a dependency change", () => {
 
 describe("the direct importers", () => {
   const CORE = "packages/a/src/core.ts";
-  const LAYOUT: WorkspaceLayout = { manifestDirs: ["packages/a", "packages/b"], workspaceDirs: new Map([["@ashara/a", "packages/a"], ["@ashara/b", "packages/b"]]) };
+  const LAYOUT: WorkspaceLayout = { manifestDirs: ["packages/a", "packages/b"], workspaceDirs: () => new Map([["@ashara/a", "packages/a"], ["@ashara/b", "packages/b"]]) };
   const TEXTS = new Map([
     ["packages/a/src/reexports.test.ts", 'export * from "./core.js";\n'],
     ["packages/a/src/requires.test.ts", 'const core: unknown = require("./core");\nexport { core };\n'],
     ["packages/a/src/split.test.ts", 'const core: unknown = await import\n("./core.js");\nexport { core };\n'],
     ["packages/a/src/mentions.test.ts", '// import { x } from "./core.js";\nexport const s = \'from "./core.js"\';\n'],
     ["packages/a/src/other.test.ts", 'import { y } from "./other.js";\nexport { y };\n'],
+    ["packages/a/src/mocks.test.ts", 'vi.mock("./core.js", async (importOriginal) => ({ ...(await importOriginal<object>()) }));\n'],
+    ["packages/a/src/actual.test.ts", 'const core = await vi.importActual<object>("./core.js");\nexport { core };\n'],
+    ["packages/a/src/resolves.test.ts", 'export const where = import.meta.resolve("./core.js");\n'],
+    ["packages/a/src/created.test.ts", 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const core: unknown = load("./core");\n'],
   ]);
 
   test("a test reaches the module through any edge the parser reads, never through a comment or a string", () => {
     const found = testsImportingDirectly([...TEXTS.keys()], [CORE], (file) => TEXTS.get(file), LAYOUT);
-    expect(found).toEqual(["packages/a/src/reexports.test.ts", "packages/a/src/requires.test.ts", "packages/a/src/split.test.ts"]);
+    expect(found).toEqual([
+      "packages/a/src/reexports.test.ts",
+      "packages/a/src/requires.test.ts",
+      "packages/a/src/split.test.ts",
+      "packages/a/src/mocks.test.ts",
+      "packages/a/src/actual.test.ts",
+      "packages/a/src/resolves.test.ts",
+      "packages/a/src/created.test.ts",
+    ]);
+  });
+
+  test("a createRequire result the reader cannot follow fails the selection, never drops the edge", () => {
+    const escaped = 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const loaders = [load];\n';
+    expect(() => testsImportingDirectly(["packages/a/src/escaped.test.ts"], [CORE], () => escaped, LAYOUT)).toThrow(/^import-targets: packages\/a\/src\/escaped\.test\.ts:3: "load" holds a createRequire/);
+  });
+
+  test("the head lockfile is read when an edge first needs the workspaces, and not before", () => {
+    const reads: string[] = [];
+    const layout = workspaceLayout(["packages/a/package.json", "packages/a/src/core.ts"], () => {
+      reads.push("package-lock.json");
+      return "{ not a lockfile";
+    });
+    expect(testsImportingDirectly(["packages/a/src/static.test.ts"], [CORE], () => 'import { x } from "./core.js";\nexport { x };\n', layout)).toEqual(["packages/a/src/static.test.ts"]);
+    expect(reads).toEqual([]);
+    const named = "const m: unknown = await import(`@ashara/${name}`);\nexport { m };\n";
+    expect(() => testsImportingDirectly(["scripts/run.test.ts"], [CORE], () => named, layout)).toThrow(/package-lock\.json at the head/);
+    expect(reads).toEqual(["package-lock.json"]);
   });
 
   test("a test whose text cannot be read stays among the direct tests", () => {
@@ -422,7 +490,7 @@ describe("the direct importers", () => {
     const named = "const m: unknown = await import(`@ashara/${name}`);\nexport { m };\n";
     expect(direct("scripts/run.test.ts", named, [CORE])).toBe(true);
     expect(direct("scripts/run.test.ts", "const m: unknown = await import(`@other/${name}`);\nexport { m };\n", [CORE])).toBe(false);
-    expect(direct("scripts/run.test.ts", named, [CORE], { ...LAYOUT, workspaceDirs: "unknown" })).toBe(true);
+    expect(direct("scripts/run.test.ts", named, [CORE], { ...LAYOUT, workspaceDirs: () => "unknown" })).toBe(true);
     expect(direct("scripts/run.test.ts", "const m: unknown = await import(`node:${name}`);\nexport { m };\n", ["scripts/other.ts"])).toBe(false);
     expect(direct("scripts/run.test.ts", "const m: unknown = await import(`${name}`);\nexport { m };\n", ["scripts/other.ts"])).toBe(true);
   });
@@ -449,6 +517,21 @@ describe("this repository's graph", () => {
     }
   });
 
+
+  test("a revision's files are read together, byte for byte as git holds them, and a file it lacks reads as absent", async () => {
+    const sources = await repositorySources(REPO, { base: "HEAD", head: "HEAD" });
+    try {
+      // connection.ts holds non-ASCII text, so a byte count read as a character count would cut it.
+      const files = ["packages/db/src/connection.ts", "scripts/affected-tests.ts", "no/such/module.ts"];
+      const texts = sources.readRevisions(files, "head");
+      for (const file of files.slice(0, 2)) expect(texts.get(file), file).toBe(execFileSync("git", ["show", `HEAD:${file}`], { cwd: REPO, encoding: "utf-8" }));
+      expect(texts.has("no/such/module.ts")).toBe(true);
+      expect(texts.get("no/such/module.ts")).toBeUndefined();
+      expect(sources.readRevision("scripts/affected-tests.ts", "base")).toBe(texts.get("scripts/affected-tests.ts"));
+    } finally {
+      await sources.close();
+    }
+  });
 
   test("a shared kernel module selects tests in other packages that reach it only through other modules", async () => {
     const sources = await repositorySources(REPO, { base: "HEAD", head: "HEAD" });

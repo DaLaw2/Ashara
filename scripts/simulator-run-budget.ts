@@ -25,6 +25,7 @@
  */
 
 import ts from "typescript";
+import { importEdges } from "./import-targets.js";
 
 /** The harness's run starters (simulator-harness.ts) and run.ts's runSeed, each with whether its run is seeded. */
 const RUN_STARTERS: ReadonlyMap<string, { readonly seeded: boolean }> = new Map([
@@ -236,13 +237,13 @@ class FileScan {
     let importedFrom: string | null = null;
     const visit = (node: ts.Node): void => {
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name && node.initializer !== undefined) initializers.push(node.initializer);
-      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.importClause?.namedBindings !== undefined && ts.isNamedImports(node.importClause.namedBindings)) {
-        const binding = node.importClause.namedBindings.elements.find((element) => element.name.text === name);
-        if (binding !== undefined && binding.propertyName === undefined) importedFrom = node.moduleSpecifier.text;
-      }
       ts.forEachChild(node, visit);
     };
     visit(source);
+    for (const edge of importEdges(source.fileName, source.text)) {
+      if (edge.form !== "import" || edge.target.kind !== "static" || edge.clause.kind !== "names") continue;
+      if (edge.clause.names.some((entry) => entry.alias === name && entry.name === name)) importedFrom = edge.target.specifier;
+    }
     const [only] = initializers;
     if (initializers.length === 1 && only !== undefined) return this.lengthOf(only, source, file, depth);
     if (initializers.length > 1 || importedFrom === null) return null;

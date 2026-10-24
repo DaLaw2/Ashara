@@ -14,6 +14,7 @@ import { parseJson } from "@ashara/shared";
 import { DB_OWNER, SHARED_OWNER, declaredTables, parseTableOwnershipRules } from "../table-ownership.js";
 import type { LintContext, Violation } from "./lint.js";
 import type { BoundaryRules, PackageRule } from "./rules.js";
+import { isRelativeSpecifier, staticEdges } from "./source-files.js";
 
 /** The package that composes every context, and the one none may import: each may hold every context's entry. */
 function composesEveryContext(rule: PackageRule | undefined): boolean {
@@ -22,16 +23,18 @@ function composesEveryContext(rule: PackageRule | undefined): boolean {
 
 export const PackageExportsSchema = z.object({ exports: z.record(z.string(), z.string()) });
 
-/** The package-relative files a relative `export ... from` statement of `file` re-exports from. */
-const RELATIVE_REEXPORT_RE = /\bexport\s+(?:type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s*from\s*["'](\.{1,2}\/[^"']*)["']/g;
+/** The specifiers of `file`'s relative `export ... from` statements, a type-only one included. */
+function relativeReexports(file: string): string[] {
+  return staticEdges(file, fs.readFileSync(file, "utf-8")).flatMap(({ specifier, edge }) => (edge.form === "export" && isRelativeSpecifier(specifier) ? [specifier] : []));
+}
 
 /** `entry` and every file it reaches by relative re-exports, followed file to file. */
 function reexportClosure(entry: string): string[] {
   const reached = new Set<string>([entry]);
   const queue = [entry];
   for (let file = queue.shift(); file !== undefined; file = queue.shift()) {
-    for (const match of fs.readFileSync(file, "utf-8").matchAll(RELATIVE_REEXPORT_RE)) {
-      const base = path.resolve(path.dirname(file), match[1]);
+    for (const specifier of relativeReexports(file)) {
+      const base = path.resolve(path.dirname(file), specifier);
       const target = [base.replace(/\.js$/, ".ts"), `${base}.ts`, path.join(base, "index.ts")].find((candidate) => fs.existsSync(candidate));
       if (target === undefined || reached.has(target)) continue;
       reached.add(target);

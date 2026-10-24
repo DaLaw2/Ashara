@@ -36,6 +36,7 @@ import path from "node:path";
 import ts from "typescript";
 import { z } from "zod";
 import { JsonParseFailed, parseJson } from "@ashara/shared";
+import { importEdges } from "./import-targets.js";
 
 const DEPENDENCY_NAME_RE = /(?:Deps|Port|Config)$/;
 
@@ -151,27 +152,12 @@ function createProgram(root: string, rootNames: readonly string[]): ts.Program {
   return ts.createProgram({ rootNames, options, host });
 }
 
-/** Value-import specifiers of a module: type-only imports and exports carry no supplier at run time. */
+/**
+ * Value-import specifiers of a module, read by import-targets.ts: type-only imports and exports carry
+ * no supplier at run time.
+ */
 function valueImportSpecifiers(sourceFile: ts.SourceFile): string[] {
-  const specifiers: string[] = [];
-  for (const statement of sourceFile.statements) {
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
-      if (statement.importClause?.isTypeOnly === true) continue;
-      specifiers.push(statement.moduleSpecifier.text);
-    } else if (ts.isExportDeclaration(statement) && statement.moduleSpecifier !== undefined && ts.isStringLiteral(statement.moduleSpecifier)) {
-      if (statement.isTypeOnly) continue;
-      specifiers.push(statement.moduleSpecifier.text);
-    }
-  }
-  const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      const [arg] = node.arguments;
-      if (arg !== undefined && ts.isStringLiteral(arg)) specifiers.push(arg.text);
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return specifiers;
+  return importEdges(sourceFile.fileName, sourceFile.text).flatMap((edge) => (edge.typeOnly || edge.target.kind !== "static" ? [] : [edge.target.specifier]));
 }
 
 /** The non-test modules of packages/ that `entry` reaches by value imports, itself included. */

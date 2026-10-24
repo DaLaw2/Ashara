@@ -10,6 +10,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { importEdges } from "../import-targets.js";
 import type { LintContext, Violation } from "./lint.js";
 import { collectTsFiles, lineAt } from "./source-files.js";
 
@@ -21,8 +22,6 @@ const SPECIFIER = "recognised-wording";
 const MIN_LITERAL_CHARS = 12;
 
 const COMMENT_RE = /\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm;
-/** An import or re-export statement: its specifier names a module, never a wording. */
-const IMPORT_RE = /^(?:import|export)\b[^;]*?\bfrom\s*["'][^"']*["'];?$/gm;
 const QUOTED_RE = /"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'/g;
 const TEMPLATE_RE = /`((?:[^`\\]|\\.)*)`/g;
 const REGEX_RE = /(?<=[(=,]\s*)\/((?:[^/\\\n]|\\.)+)\/[dgimsuy]*/g;
@@ -46,9 +45,16 @@ function literalPrefix(source: string): string {
   return text;
 }
 
+/** The source with every import edge's specifier blanked, quotes included: a specifier names a module, never a wording. */
+function withoutSpecifiers(file: string, source: string): string {
+  let code = source;
+  for (const { start, end } of importEdges(file, source)) code = `${code.slice(0, start)}${" ".repeat(end - start)}${code.slice(end)}`;
+  return code;
+}
+
 /** Every recognised literal of the wording module's source, each once. */
-function recognisedLiterals(source: string): string[] {
-  const code = source.replace(COMMENT_RE, "").replace(IMPORT_RE, "");
+function recognisedLiterals(file: string, source: string): string[] {
+  const code = withoutSpecifiers(file, source).replace(COMMENT_RE, "");
   const found = new Set<string>();
   for (const match of code.matchAll(QUOTED_RE)) found.add(match[1] ?? match[2]);
   for (const match of code.matchAll(TEMPLATE_RE)) for (const part of match[1].split(/\$\{[^}]*\}/)) found.add(part);
@@ -61,7 +67,7 @@ export function run(context: LintContext): Violation[] {
   const wordingPath = path.join(root, WORDING_MODULE);
   const at = (file: string, line: number, reason: string): Violation => ({ file, line, fromPkg: "integration", specifier: SPECIFIER, reason });
   if (!fs.existsSync(wordingPath)) return [at(WORDING_MODULE, 0, "the simulator's wording module is missing; a scan against no wording would pass")];
-  const literals = recognisedLiterals(fs.readFileSync(wordingPath, "utf-8"));
+  const literals = recognisedLiterals(wordingPath, fs.readFileSync(wordingPath, "utf-8"));
   if (literals.length === 0) return [at(WORDING_MODULE, 0, "the wording module holds no recognised literal; a scan of nothing would pass")];
   const violations: Violation[] = [];
   for (const filePath of collectTsFiles(path.join(root, SIMULATOR_DIR))) {

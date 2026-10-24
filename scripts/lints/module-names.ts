@@ -3,7 +3,9 @@
  * (`module-names.<module>`): a table object whose every write and read belongs to one module. Every
  * other file of the package, tests included, that names a held symbol in an import or re-export of
  * its entry is a violation, and so is a namespace or default import of that entry, `export *` from
- * it, or any other reference to it (a dynamic import), each of which reaches the symbol by no name.
+ * it, or any other edge that may load it (a dynamic import, a require, a vitest loader, an import
+ * whose target no literal spells whole), each of which reaches the symbol by no name. Edges and
+ * export lists are read from each file's syntax tree (import-targets.ts).
  * Inside the module, re-exporting a held symbol (`export { x }`, `export { x } from`) hands it to
  * every importer, so that is a violation too. A held symbol the entry does not export, or that no
  * file of the module imports, is a violation of the rules: the list names only what holds.
@@ -14,21 +16,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseJson } from "@ashara/shared";
+import { exportLists } from "../import-targets.js";
 import type { LintContext, PackageScan, Violation } from "./lint.js";
 import type { HeldName } from "./rules.js";
-import { extractNamedImports, lineAt, matchesAnyGlob } from "./source-files.js";
+import { extractNamedImports, matchesAnyGlob, mayNameAshara } from "./source-files.js";
 import { PackageExportsSchema } from "./subpath-entries.js";
 
 const EXPORTED_DECLARATION_RE = (name: string): RegExp => new RegExp(`\\bexport\\s+(?:declare\\s+)?(?:const|let|var|function|async\\s+function|class|abstract\\s+class|enum)\\s+${name.replace(/\$/g, "\\$")}\\b`);
-const EXPORT_LIST_RE = /\bexport\s+(?:type\s+)?\{([^}]*)\}/g;
-
-/** The names a brace list states, each as the file knows it: `a as b` is `a`, `type a` is `a`. */
-function listedNames(list: string): string[] {
-  return list
-    .split(",")
-    .map((entry) => entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim())
-    .filter((name) => name !== "");
-}
 
 /** The file an entry of a package resolves to by its package.json exports; null when it exports no such entry. */
 function entryFile(packagesDir: string, held: HeldName): string | null {
@@ -42,7 +36,7 @@ function entryFile(packagesDir: string, held: HeldName): string | null {
 
 function exportsName(file: string, name: string): boolean {
   const content = fs.readFileSync(file, "utf-8");
-  return EXPORTED_DECLARATION_RE(name).test(content) || [...content.matchAll(EXPORT_LIST_RE)].some((list) => listedNames(list[1]).includes(name));
+  return EXPORTED_DECLARATION_RE(name).test(content) || exportLists(file, content).some((list) => list.names.some((entry) => entry.alias === name));
 }
 
 function heldViolations(scan: PackageScan, module: string, held: readonly HeldName[], context: LintContext): Violation[] {
@@ -62,7 +56,7 @@ function heldViolations(scan: PackageScan, module: string, held: readonly HeldNa
     const file = path.relative(root, filePath).split(path.sep).join("/");
     const inModule = matchesAnyGlob(scan.relativeTo(filePath), globs);
     const at = (line: number, specifier: string, reason: string): Violation => ({ file, line, fromPkg: scan.name, specifier, reason: `${rule}: ${reason}` });
-    const { imports, unaccounted } = extractNamedImports(content);
+    const { imports, unaccounted } = extractNamedImports(filePath, content);
     for (const statement of imports) {
       const entryHeld = held.filter((each) => statement.specifier === `@ashara/${each.entry}`);
       if (entryHeld.length === 0) continue;
@@ -77,14 +71,14 @@ function heldViolations(scan: PackageScan, module: string, held: readonly HeldNa
       }
     }
     for (const reference of unaccounted) {
-      if (!inModule && held.some((each) => reference.specifier === `@ashara/${each.entry}`)) {
+      if (!inModule && held.some((each) => mayNameAshara(reference.target, each.entry))) {
         violations.push(at(reference.line, reference.specifier, "not an `import {...} from` statement, so the symbols it reaches cannot be checked"));
       }
     }
     if (!inModule) continue;
-    for (const list of content.matchAll(EXPORT_LIST_RE)) {
+    for (const list of exportLists(filePath, content)) {
       for (const each of held) {
-        if (listedNames(list[1]).includes(each.name)) violations.push(at(lineAt(content, list.index), `@ashara/${each.entry}`, `re-exports "${each.name}", which hands it to every importer of the file`));
+        if (list.names.some((entry) => entry.name === each.name)) violations.push(at(list.line, `@ashara/${each.entry}`, `re-exports "${each.name}", which hands it to every importer of the file`));
       }
     }
   }

@@ -3,18 +3,20 @@
  * its src/ belongs to exactly one module: a test file to its subject's (`x.test.ts` and
  * `x.<tag>.test.ts` to `x.ts`), any other file to the one module whose glob it matches. A file that
  * matches none, or two, is a violation, and so is a module glob that matches no file. Every relative
- * specifier between two of its modules is checked, `import type` included (a type is language): the
+ * import edge (import-targets.ts) whose literal specifier joins two of its modules is checked,
+ * `import type` included (a type is language): the
  * importer's `module-allow` must list the target, a target it lists by `<module>:<glob>` admits only
  * those files to it, and a target with `module-entry` admits only those files to any module. The module named `entry` (the barrel) may import every module, and no module may import it.
  * A `module-allow` graph with a cycle is a parse error, so a cycle between modules cannot return.
- * Blind spots: a computed dynamic import, and what is placed inside one file, are not seen.
+ * Blind spots: an edge whose target no literal spells whole (a computed or template dynamic import),
+ * and what is placed inside one file, are not seen.
  */
 
 import path from "node:path";
 import type { LintContext, Violation } from "./lint.js";
 import { ENTRY_MODULE } from "./module-rules.js";
 import type { PackageRule } from "./rules.js";
-import { RELATIVE_LITERAL_RE, lineAt, matchesAnyGlob, resolveRelative } from "./source-files.js";
+import { isRelativeSpecifier, matchesAnyGlob, resolveRelative, staticEdges } from "./source-files.js";
 
 interface ModuleScope {
   readonly rule: PackageRule;
@@ -110,15 +112,13 @@ function moduleViolations(scope: ModuleScope): Violation[] {
     const from = moduleOf.get(filePath);
     // A file in no module is reported above, and test/ is outside the module rule.
     if (from === undefined) continue;
-    for (const match of content.matchAll(RELATIVE_LITERAL_RE)) {
-      const specifier = match[2];
-      const line = lineAt(content, match.index + match[0].length - match[1].length);
+    for (const { line, specifier } of staticEdges(filePath, content).filter((edge) => isRelativeSpecifier(edge.specifier))) {
       const target = path.relative(pkgRoot, path.resolve(path.dirname(filePath), specifier)).split(path.sep).join("/");
       // A path out of the package is a cross-package import, checked against the context map.
       if (target.startsWith("../") || path.isAbsolute(target)) continue;
       const resolved = resolveRelative(filePath, specifier, scanned);
-      // No scanned .ts file: the match is text in a string (a fixture's source), since an import that
-      // resolves to no module fails the typecheck gate.
+      // No scanned .ts file: the edge loads a file that is no module (a JSON file), since an import
+      // that resolves to no module fails the typecheck gate.
       if (resolved === null) continue;
       const to = moduleOf.get(resolved);
       if (to === undefined || to === from || from === ENTRY_MODULE) continue;

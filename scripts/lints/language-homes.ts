@@ -4,6 +4,7 @@
  * language it is, and a package that moved it out leaves no copy and no re-export shim behind.
  */
 
+import { exportLists } from "../import-targets.js";
 import { BoundaryRulesParseError } from "./rules-parse-error.js";
 import type { LintContext, Violation } from "./lint.js";
 
@@ -45,18 +46,17 @@ function escapeRegExp(text: string): string {
   return text.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
 }
 
-/** Where `source` declares `name`, or names it in an export list (a re-export included): 1-based lines. */
-function declarationLines(source: string, name: string): number[] {
-  const word = escapeRegExp(name);
-  const patterns = [
-    new RegExp(`^[ \\t]*(?:export\\s+)?(?:declare\\s+)?(?:async\\s+)?(?:type|interface|function|const|let|var|class|enum)\\s+${word}(?![\\w$])`, "gm"),
-    new RegExp(`^[ \\t]*export\\s+(?:type\\s+)?\\{[^}]*?(?<![\\w$])${word}(?![\\w$])`, "gm"),
-  ];
+/**
+ * Where the file at `filePath` declares `name`, or names it in an export list (a re-export included,
+ * under its own name or the one it is exported as): 1-based lines. The export lists are read from the
+ * syntax tree (import-targets.ts).
+ */
+function declarationLines(filePath: string, source: string, name: string): number[] {
+  const declaration = new RegExp(`^[ \\t]*(?:export\\s+)?(?:declare\\s+)?(?:async\\s+)?(?:type|interface|function|const|let|var|class|enum)\\s+${escapeRegExp(name)}(?![\\w$])`, "gm");
   const lines = new Set<number>();
-  for (const pattern of patterns) {
-    for (const match of source.matchAll(pattern)) {
-      lines.add(source.slice(0, match.index + match[0].length).split("\n").length);
-    }
+  for (const match of source.matchAll(declaration)) lines.add(source.slice(0, match.index + match[0].length).split("\n").length);
+  for (const list of exportLists(filePath, source)) {
+    for (const entry of list.names) if (entry.name === name || entry.alias === name) lines.add(entry.line);
   }
   return [...lines].sort((a, b) => a - b);
 }
@@ -70,7 +70,7 @@ export function run(context: LintContext): Violation[] {
       for (const [filePath, source] of pkg.contents) {
         const relative = pkg.relativeTo(filePath);
         if (relative.endsWith(".test.ts")) continue;
-        for (const line of declarationLines(source, home.name)) {
+        for (const line of declarationLines(filePath, source, home.name)) {
           if (pkg.name === home.pkg) {
             declaredAtHome = true;
             continue;

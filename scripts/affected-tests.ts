@@ -38,7 +38,12 @@
  *   one names it by its static prefix. An import() or require() whose target no static prefix
  *   bounds, or a file whose text cannot be read, brings every module and test of its workspace
  *   (the deepest enclosing directory with a package.json, or the root project's files outside
- *   them). The reasons name every file each of these adds.
+ *   them). The import edges include requires (a createRequire binding's calls among them), vitest's
+ *   loaders (vi.mock, vi.importActual) and import.meta.resolve. The reasons name each selected
+ *   workspace (in the changed manifest's or lockfile's line), every module and test that imports a
+ *   changed package by name (in that package's line), and each file whose target no static prefix
+ *   bounds or whose text cannot be read, with the workspace it brings; the files a workspace holds
+ *   and the graph dependants are counted in the selection, not named.
  * - Whole suite (WHOLE_SUITE_RULES): a file that changes how every test is collected, compiled,
  *   resolved or run, or that every database test reads at runtime. Any one such file selects the
  *   whole suite, each with the reason the table states.
@@ -205,6 +210,8 @@ export interface SelectionSources {
   readonly files: readonly string[];
   /** A file's text at the merge base or at the head of the change; undefined where it does not exist. */
   readonly readRevision: (file: string, side: "base" | "head") => string | undefined;
+  /** Each of `files`' text at one side, read together; undefined where a file does not exist there. */
+  readonly readRevisions: (files: readonly string[], side: "base" | "head") => ReadonlyMap<string, string | undefined>;
   /** The test files that import any of these modules through the graph, repo-relative. */
   readonly testsImporting: (modules: readonly string[]) => Promise<readonly string[]>;
   /** The tracked or untracked files whose text contains `name`, repo-relative. */
@@ -409,9 +416,10 @@ async function dependencyTests(impacts: readonly DependencyImpact[], sources: Se
       takeWorkspace(workspace);
       reasons.add(`${file}: ${why}, so every module and test of ${workspaceLabel(workspace)} runs, past the cap`);
     };
-    for (const file of sources.files) {
-      if (!allTests.has(file) && !GRAPH_MODULE_RE.test(file)) continue;
-      const text = sources.readRevision(file, "head");
+    const readable = sources.files.filter((file) => allTests.has(file) || GRAPH_MODULE_RE.test(file));
+    const texts = sources.readRevisions(readable, "head");
+    for (const file of readable) {
+      const text = texts.get(file);
       if (text === undefined) {
         takeOwningWorkspace(file, "its text cannot be read to see what it imports");
         continue;
@@ -555,9 +563,59 @@ export interface Revisions {
   readonly head: string | undefined;
 }
 
-function textAt(root: string, revision: string, file: string): string | undefined {
-  if (git(root, ["ls-tree", "-z", "--name-only", revision, "--", file]) === "") return undefined;
-  return git(root, ["show", `${revision}:${file}`]);
+/** A revision's blobs by path: one `git ls-tree` for the whole tree. A submodule entry is no blob. */
+function blobsAt(root: string, revision: string): Map<string, string> {
+  const blobs = new Map<string, string>();
+  for (const record of git(root, ["ls-tree", "-r", "-z", "--full-tree", revision]).split("\0")) {
+    if (record === "") continue;
+    const tab = record.indexOf("\t");
+    const [, type, oid] = tab < 0 ? [] : record.slice(0, tab).split(" ");
+    if (oid === undefined) throw new AffectedTestsError(`git ls-tree ${revision}`, `unreadable record ${JSON.stringify(record)}`);
+    if (type === "blob") blobs.set(record.slice(tab + 1), oid);
+  }
+  return blobs;
+}
+
+/**
+ * The text of each blob, read by one `git cat-file --batch`: each answer is a `<oid> <type> <size>`
+ * line, the size's bytes and a newline. An answer that is not a blob fails the read.
+ */
+function blobTexts(root: string, oids: readonly string[]): Map<string, string> {
+  const texts = new Map<string, string>();
+  if (oids.length === 0) return texts;
+  const unique = [...new Set(oids)];
+  const result = spawnSync("git", ["cat-file", "--batch"], { cwd: root, input: `${unique.join("\n")}\n`, maxBuffer: 1024 * 1024 * 1024, timeout: 60_000 });
+  if (result.error !== undefined) throw new AffectedTestsError("git cat-file --batch", describeErrorChain(result.error));
+  if (result.status !== 0) throw new AffectedTestsError("git cat-file --batch", `exit ${String(result.status)}: ${result.stderr.toString("utf-8").trim()}`);
+  const out = result.stdout;
+  let at = 0;
+  for (const oid of unique) {
+    const eol = out.indexOf(0x0a, at);
+    const header = eol < 0 ? "" : out.subarray(at, eol).toString("utf-8");
+    const [answered, type, size] = header.split(" ");
+    if (answered !== oid || type !== "blob" || size === undefined || !/^\d+$/.test(size)) throw new AffectedTestsError("git cat-file --batch", `expected blob ${oid}, got ${JSON.stringify(header)}`);
+    const start = eol + 1;
+    const end = start + Number(size);
+    if (end > out.length) throw new AffectedTestsError("git cat-file --batch", `blob ${oid} is cut short`);
+    texts.set(oid, out.subarray(start, end).toString("utf-8"));
+    at = end + 1;
+  }
+  return texts;
+}
+
+/** Each of `files`' text at `revision`, undefined for a file the revision holds no blob at; one ls-tree per revision, one cat-file per call. */
+function revisionReader(root: string): (revision: string, files: readonly string[]) => Map<string, string | undefined> {
+  const trees = new Map<string, Map<string, string>>();
+  return (revision, files) => {
+    let blobs = trees.get(revision);
+    if (blobs === undefined) {
+      blobs = blobsAt(root, revision);
+      trees.set(revision, blobs);
+    }
+    const located = files.map((file) => ({ file, oid: blobs.get(file) }));
+    const texts = blobTexts(root, located.flatMap(({ oid }) => (oid === undefined ? [] : [oid])));
+    return new Map(located.map(({ file, oid }) => [file, oid === undefined ? undefined : texts.get(oid)]));
+  };
 }
 
 /**
@@ -571,23 +629,31 @@ export async function repositorySources(root: string, revisions: Revisions): Pro
   const relative = (abs: string): string => path.relative(root, abs).split(path.sep).join("/");
   const allTests = [...new Set((await vitest.globTestSpecifications()).map((s) => relative(s.moduleId)))].sort();
   const files = git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter((f) => f !== "");
-  const readRevision = (file: string, side: "base" | "head"): string | undefined => {
-    if (side === "base") return textAt(root, revisions.base, file);
-    if (revisions.head !== undefined) return textAt(root, revisions.head, file);
-    const full = path.join(root, file);
-    return fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : undefined;
+  const readAt = revisionReader(root);
+  const readRevisions = (wanted: readonly string[], side: "base" | "head"): Map<string, string | undefined> => {
+    const revision = side === "base" ? revisions.base : revisions.head;
+    if (revision !== undefined) return readAt(revision, wanted);
+    return new Map(wanted.map((file) => {
+      const full = path.join(root, file);
+      return [file, fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : undefined];
+    }));
   };
-  const layout: WorkspaceLayout = { manifestDirs: manifestDirsOf(files), workspaceDirs: workspaceDirsOf(readRevision(LOCKFILE, "head")) };
+  const readRevision = (file: string, side: "base" | "head"): string | undefined => readRevisions([file], side).get(file);
+  const layout = workspaceLayout(files, () => readRevision(LOCKFILE, "head"));
   return {
     allTests,
     files,
     readRevision,
+    readRevisions,
     testsImporting: async (modules) => {
       vitest.config.related = modules.map((m) => path.join(root, m));
       const specs = await vitest.getRelevantTestSpecifications();
       return [...new Set(specs.map((s) => relative(s.moduleId)))];
     },
-    testsImportingDirectly: (modules) => Promise.resolve(testsImportingDirectly(allTests, modules, (file) => readRevision(file, "head"), layout)),
+    testsImportingDirectly: (modules) => {
+      const texts = readRevisions(allTests, "head");
+      return Promise.resolve(testsImportingDirectly(allTests, modules, (file) => texts.get(file), layout));
+    },
     filesNaming: (name) => {
       const result = spawnSync("git", ["grep", "-l", "-z", "-F", "--untracked", "-e", name], { cwd: root, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024, timeout: 60_000 });
       if (result.error !== undefined) throw new AffectedTestsError(`git grep ${name}`, describeErrorChain(result.error));
@@ -615,15 +681,29 @@ function specifierTargets(importer: string, specifier: string): string[] {
 export interface WorkspaceLayout {
   /** Every directory with a package.json other than the root, repo-relative. */
   readonly manifestDirs: readonly string[];
-  /** Each workspace's directory by its package name, or "unknown" when no lockfile records them. */
-  readonly workspaceDirs: ReadonlyMap<string, string> | "unknown";
+  /**
+   * Each workspace's directory by its package name, or "unknown" when no lockfile records them; read
+   * when an edge first needs it (a template target that names a package), never before.
+   */
+  readonly workspaceDirs: () => ReadonlyMap<string, string> | "unknown";
+}
+
+/**
+ * The layout of a tree whose files are `files`, its workspaces read from the head lockfile `readLockfile`
+ * returns, on first use only: a lockfile no edge needs is never parsed, and a malformed one an edge
+ * needs fails the selection.
+ * @testseam affected-tests.test.ts exercises it without running the CLI
+ */
+export function workspaceLayout(files: readonly string[], readLockfile: () => string | undefined): WorkspaceLayout {
+  let dirs: ReadonlyMap<string, string> | "unknown" | undefined;
+  return { manifestDirs: manifestDirsOf(files), workspaceDirs: () => (dirs ??= workspaceDirsOf(readLockfile())) };
 }
 
 /**
  * The workspaces of the head lockfile, by package name: its entries under no node_modules segment.
  * No lockfile at the head leaves them unknown, so a template target that names a package may name any.
  */
-function workspaceDirsOf(text: string | undefined): WorkspaceLayout["workspaceDirs"] {
+function workspaceDirsOf(text: string | undefined): ReadonlyMap<string, string> | "unknown" {
   if (text === undefined) return "unknown";
   const lock = parseLockfile(text, `${LOCKFILE} at the head`);
   const dirs = new Map<string, string>();
@@ -654,8 +734,9 @@ function edgeMayLoad(importer: string, target: ImportTarget, modules: readonly s
       return modules.some((m) => m.startsWith(begins));
     }
     if (bound === "package") {
-      if (layout.workspaceDirs === "unknown") return modules.length > 0;
-      const dirs = [...layout.workspaceDirs].filter(([name]) => prefixMayName(target.prefix, name)).map(([, dir]) => `${dir}/`);
+      const workspaceDirs = layout.workspaceDirs();
+      if (workspaceDirs === "unknown") return modules.length > 0;
+      const dirs = [...workspaceDirs].filter(([name]) => prefixMayName(target.prefix, name)).map(([, dir]) => `${dir}/`);
       return modules.some((m) => dirs.some((dir) => m.startsWith(dir)));
     }
   }

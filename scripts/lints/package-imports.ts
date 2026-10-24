@@ -4,7 +4,9 @@
  * cross-package import is an `@ashara/<pkg>` specifier (with or without a
  * subpath) or a relative specifier that resolves into another package
  * directory; a relative specifier that resolves outside packages/ is itself a
- * violation. Only single-line `from`/`import` specifiers are recognised.
+ * violation. The edges are read from each file's syntax tree (import-targets.ts): every import,
+ * re-export, require, vitest loader and type-position import whose specifier is a literal, written on
+ * one line or across several; a comment or a string that spells an import is none.
  *
  * A package that states `subpath-importers` is reached only by its root entry and the subpaths it
  * lists: each subpath its package.json exports needs a list and each list an exported subpath, an
@@ -24,8 +26,9 @@
  * of any other, the root included unless "." is listed, is a violation, and so is a relative path into
  * <pkg>, which names no entry.
  *
- * A named-only file is read whole, not line by line: every `@ashara/` specifier in it must be the
- * tail of an `import {...} from` or `export {...} from` statement whose every name is listed, a
+ * A named-only file's every edge that may load an `@ashara/` module (one whose target no literal
+ * spells whole included) must be an `import {...} from` or `export {...} from` statement whose every
+ * name is listed, a
  * relative import may not leave the named-only files, and a listed name no named-only file imports
  * is itself a violation, so the list never grows past what is used (a simulator oracle
  * never imports the production predicate it judges). A stand-in is held to `stand-in-names` through
@@ -35,15 +38,17 @@
  */
 
 import path from "node:path";
+import { importEdges } from "../import-targets.js";
 import type { LintContext, PackageScan, Violation } from "./lint.js";
 import type { BoundaryRules } from "./rules.js";
 import {
-  PACKAGE_IMPORT_RE,
-  RELATIVE_IMPORT_RE,
+  asharaPackageOf,
   extractAsharaImports,
   extractNamedImports,
+  isRelativeSpecifier,
   matchesAnyGlob,
-  scanLines,
+  shownTarget,
+  staticEdges,
 } from "./source-files.js";
 import { checkStandIns } from "./stand-ins.js";
 
@@ -127,7 +132,7 @@ function packageViolations(context: LintContext, pkg: PackageScan): Violation[] 
   return violations;
 }
 
-/** A bounds-table file imports nothing: each bound states its decision, never a production constant. */
+/** A bounds-table file imports neither another package nor another file: each bound states its decision, never a production constant. */
 function checkBoundsTable(scan: FileScan): void {
   const { context, pkg, filePath, content, pkgRelative, violations } = scan;
   const at = (line: number, specifier: string, reason: string): Violation => ({
@@ -139,8 +144,14 @@ function checkBoundsTable(scan: FileScan): void {
   });
   if (!matchesAnyGlob(pkgRelative, pkg.rule.namedOnly)) violations.push(at(0, "bounds-tables", `a bounds-table file must also be a named-only file (${pkg.rule.namedOnly.join(", ")})`));
   // Each bound states its decision, never a production constant: nothing is imported, a type included.
-  scanLines(content, PACKAGE_IMPORT_RE, (line, match) => violations.push(at(line, match[1], "it imports nothing from another package; each bound cites its decision instead")));
-  scanLines(content, RELATIVE_IMPORT_RE, (line, match) => violations.push(at(line, match[1], "it imports no other file, which could hand it a production constant")));
+  const edges = importEdges(filePath, content);
+  for (const { line, target } of edges) {
+    if (target.kind === "static" && asharaPackageOf(target.specifier) !== null) violations.push(at(line, target.specifier, "it imports nothing from another package; each bound cites its decision instead"));
+  }
+  for (const { line, target } of edges) {
+    // A target no literal spells whole may name another file of the package as well as any other.
+    if (target.kind !== "static" || isRelativeSpecifier(target.specifier)) violations.push(at(line, shownTarget(target), "it imports no other file, which could hand it a production constant"));
+  }
 }
 
 function namedOnlyViolation(scan: FileScan, line: number, specifier: string, reason: string): Violation {
@@ -149,8 +160,8 @@ function namedOnlyViolation(scan: FileScan, line: number, specifier: string, rea
 
 /** A named-only file's imports of another package each name only listed symbols; the names it uses are counted into `namesUsed`. */
 function checkNamedOnly(scan: FileScan, namesUsed: Map<string, Set<string>>): void {
-  const { content, violations } = scan;
-  const named = extractNamedImports(content);
+  const { filePath, content, violations } = scan;
+  const named = extractNamedImports(filePath, content);
   for (const loose of named.unaccounted) {
     violations.push(namedOnlyViolation(scan, loose.line, loose.specifier, "not an `import {...} from` or `export {...} from` statement, so its names cannot be checked"));
   }
@@ -175,18 +186,18 @@ function checkNamedOnly(scan: FileScan, namesUsed: Map<string, Set<string>>): vo
 /** A named-only file's relative imports stay inside the package's named-only files. */
 function checkNamedOnlyRelatives(scan: FileScan): void {
   const { pkg, filePath, content, violations } = scan;
-  scanLines(content, RELATIVE_IMPORT_RE, (line, match) => {
-    const target = path.relative(pkg.root, path.resolve(path.dirname(filePath), match[1])).split(path.sep).join("/");
+  for (const { line, specifier } of staticEdges(filePath, content).filter((edge) => isRelativeSpecifier(edge.specifier))) {
+    const target = path.relative(pkg.root, path.resolve(path.dirname(filePath), specifier)).split(path.sep).join("/");
     // Another package's file reached by path would carry no names to check.
     if (target.startsWith("../") || path.isAbsolute(target)) {
-      violations.push(namedOnlyViolation(scan, line, match[1], "the relative import leaves the package; import another package by its @ashara/ name"));
-      return;
+      violations.push(namedOnlyViolation(scan, line, specifier, "the relative import leaves the package; import another package by its @ashara/ name"));
+      continue;
     }
     const candidates = [target, target.replace(/\.js$/, ".ts")];
     if (!candidates.some((candidate) => matchesAnyGlob(candidate, pkg.rule.namedOnly))) {
-      violations.push(namedOnlyViolation(scan, line, match[1], `the relative import leaves the named-only files (${pkg.rule.namedOnly.join(", ")})`));
+      violations.push(namedOnlyViolation(scan, line, specifier, `the relative import leaves the named-only files (${pkg.rule.namedOnly.join(", ")})`));
     }
-  });
+  }
 }
 
 /** One cross-package import held to the matrix: the target's importers, the allow list, restrict, subpaths and entries. */

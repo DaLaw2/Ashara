@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseJson } from "@ashara/shared";
 import type { LintContext, Violation } from "./lint.js";
-import { PACKAGE_IMPORT_RE, RELATIVE_IMPORT_RE, collectTsFiles, scanLines } from "./source-files.js";
+import { collectTsFiles, isRelativeSpecifier, staticEdges } from "./source-files.js";
 import { PackageExportsSchema } from "./subpath-entries.js";
 
 const TEST_HARNESS = "integration";
@@ -47,14 +47,15 @@ export function run(context: LintContext): Violation[] {
     for (const filePath of collectTsFiles(dir).filter((file) => !file.endsWith(".test.ts") && !entries.has(file))) {
       const content = fs.readFileSync(filePath, "utf-8");
       const file = path.relative(root, filePath).split(path.sep).join("/");
-      scanLines(content, PACKAGE_IMPORT_RE, (line, match) => {
-        if (specifiers.has(match[1])) violations.push({ file, line, fromPkg: pkg, specifier: match[1], reason: reason(match[1]) });
-      });
-      scanLines(content, RELATIVE_IMPORT_RE, (line, match) => {
-        const base = path.resolve(path.dirname(filePath), match[1]);
+      const edges = staticEdges(filePath, content);
+      for (const { line, specifier } of edges) {
+        if (specifiers.has(specifier)) violations.push({ file, line, fromPkg: pkg, specifier, reason: reason(specifier) });
+      }
+      for (const { line, specifier } of edges.filter((each) => isRelativeSpecifier(each.specifier))) {
+        const base = path.resolve(path.dirname(filePath), specifier);
         const entry = [base, base.replace(/\.js$/, ".ts"), `${base}.ts`, path.join(base, "index.ts")].map((candidate) => entries.get(candidate)).find((found) => found !== undefined);
-        if (entry !== undefined) violations.push({ file, line, fromPkg: pkg, specifier: match[1], reason: reason(entry) });
-      });
+        if (entry !== undefined) violations.push({ file, line, fromPkg: pkg, specifier, reason: reason(entry) });
+      }
     }
   }
   return violations;

@@ -57,7 +57,7 @@ export function checkStandIns(scope: StandInScope): Map<string, Set<string>> {
       specifier,
       reason: `${where}: ${reason}`,
     });
-    for (const ref of extractNamedImports(content).imports) {
+    for (const ref of extractNamedImports(filePath, content).imports) {
       // eslint-disable-next-line no-restricted-syntax -- policy default: a package with no names list is left to the named-only check, which reports it (docblock above)
       const wider = rule.names.get(ref.pkg) ?? [];
       // eslint-disable-next-line no-restricted-syntax -- policy default: a package with no stand-in names allows the stand-in none, so each listed name is reported below
@@ -74,7 +74,7 @@ export function checkStandIns(scope: StandInScope): Map<string, Set<string>> {
         used.set(ref.pkg, names);
       }
     }
-    for (const relative of valueRelativeImports(content)) {
+    for (const relative of valueRelativeImports(filePath, content)) {
       const target = path.relative(pkgRoot, path.resolve(path.dirname(filePath), relative.specifier)).split(path.sep).join("/");
       // A path out of the package or out of the named-only files is reported by the named-only check.
       if (target.startsWith("../") || path.isAbsolute(target)) continue;

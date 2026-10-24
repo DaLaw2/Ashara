@@ -10,7 +10,9 @@
  * What is read: every string, no-substitution template, template part and regular expression
  * literal of a non-test .ts file under packages/<pkg>/src, parsed with the TypeScript compiler, so
  * a quote inside a regular expression never hides the rest of a line. A module specifier is not
- * read: `import "./x.js"` names a module of Ashara, not a stack it assumes. Comments and
+ * read: `import "./x.js"` names a module of Ashara, not a stack it assumes; the specifiers are the
+ * import edges import-targets.ts reads (a require's and a vitest loader's among them) and a
+ * `declare module` name. Comments and
  * identifiers are not read: a comment changes no behaviour, and the defect is code that decides or
  * instructs on a literal.
  *
@@ -31,6 +33,7 @@
  */
 
 import ts from "typescript";
+import { importEdges } from "./import-targets.js";
 
 class StackLiteralRulesError extends Error {
   constructor(
@@ -160,17 +163,13 @@ function tokensIn(text: string, tokens: readonly string[]): string[] {
     .map((f) => f.token);
 }
 
-function isModuleSpecifier(node: ts.Node): boolean {
-  const parent = node.parent;
-  if (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) return parent.moduleSpecifier === node;
-  if (ts.isExternalModuleReference(parent) || ts.isModuleDeclaration(parent)) return true;
-  if (ts.isLiteralTypeNode(parent)) return ts.isImportTypeNode(parent.parent);
-  if (ts.isCallExpression(parent)) return parent.expression.kind === ts.SyntaxKind.ImportKeyword && parent.arguments[0] === node;
-  return false;
+/** A module's name: an import edge's specifier (import-targets.ts), at one of `specifierStarts`, or a `declare module` name. */
+function isModuleSpecifier(node: ts.Node, sourceFile: ts.SourceFile, specifierStarts: ReadonlySet<number>): boolean {
+  return specifierStarts.has(node.getStart(sourceFile)) || ts.isModuleDeclaration(node.parent);
 }
 
-function literalText(node: ts.Node, sourceFile: ts.SourceFile): string | null {
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return isModuleSpecifier(node) ? null : node.text;
+function literalText(node: ts.Node, sourceFile: ts.SourceFile, specifierStarts: ReadonlySet<number>): string | null {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return isModuleSpecifier(node, sourceFile, specifierStarts) ? null : node.text;
   if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) return node.text;
   if (ts.isRegularExpressionLiteral(node)) return node.getText(sourceFile);
   return null;
@@ -180,8 +179,9 @@ function literalText(node: ts.Node, sourceFile: ts.SourceFile): string | null {
 export function findStackLiterals(source: string, fileName: string, tokens: readonly string[]): StackLiteralHit[] {
   const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const hits: StackLiteralHit[] = [];
+  const specifierStarts = new Set(importEdges(fileName, source).map((edge) => edge.start));
   const visit = (node: ts.Node): void => {
-    const text = literalText(node, sourceFile);
+    const text = literalText(node, sourceFile, specifierStarts);
     if (text !== null) {
       const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
       const written = node.getText(sourceFile);

@@ -12,6 +12,7 @@
  */
 
 import ts from "typescript";
+import { importEdges } from "../import-targets.js";
 import type { LintContext, Violation } from "./lint.js";
 
 const MIRRORED_TYPES = "mirrored-types";
@@ -199,19 +200,13 @@ function objectMembers(declaration: ts.InterfaceDeclaration | ts.TypeAliasDeclar
   return null;
 }
 
-/** Each name `sf` binds by an import declaration, with the module it is imported from. */
-function importedNames(sf: ts.SourceFile): ReadonlyMap<string, string> {
+/** Each name `file` binds by an import declaration of a literal specifier, with the module it is imported from. */
+function importedNames(file: string, source: string): ReadonlyMap<string, string> {
   const names = new Map<string, string>();
-  for (const statement of sf.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-    const from = statement.moduleSpecifier.text;
-    const clause = statement.importClause;
-    if (clause === undefined) continue;
-    if (clause.name !== undefined) names.set(clause.name.text, from);
-    const bindings = clause.namedBindings;
-    if (bindings === undefined) continue;
-    if (ts.isNamespaceImport(bindings)) names.set(bindings.name.text, from);
-    else for (const element of bindings.elements) names.set(element.name.text, from);
+  for (const edge of importEdges(file, source)) {
+    if (edge.form !== "import" && edge.form !== "import-equals") continue;
+    if (edge.target.kind !== "static") continue;
+    for (const local of edge.locals) names.set(local, edge.target.specifier);
   }
   return names;
 }
@@ -235,7 +230,7 @@ function returnOfImport(declaration: ts.InterfaceDeclaration | ts.TypeAliasDecla
 /** Every top-level interface and type alias of `source`. */
 function typeDeclarations(file: string, source: string): TypeDeclaration[] {
   const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const imports = importedNames(sf);
+  const imports = importedNames(file, source);
   return sf.statements
     .filter((statement) => ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement))
     .map((declaration) => ({

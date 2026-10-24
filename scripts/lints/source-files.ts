@@ -1,7 +1,8 @@
-/** Reading the TypeScript source the lints scan: files, globs and import specifiers, line by line. */
+/** Reading the TypeScript source the lints scan: files, globs, and import edges from each file's syntax tree. */
 
 import fs from "node:fs";
 import path from "node:path";
+import { importEdges, type ImportEdge, type ImportTarget } from "../import-targets.js";
 
 // ---------------------------------------------------------------------------
 // Glob matching (package-relative paths; `*` stays within a segment, `**` crosses)
@@ -62,7 +63,8 @@ export function collectTsFiles(dir: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Import extraction
+// Import extraction: every edge is read from the file's syntax tree (import-targets.ts), never
+// from its text, so a comment or a string that spells an import is none.
 // ---------------------------------------------------------------------------
 
 export interface ImportRef {
@@ -72,23 +74,51 @@ export interface ImportRef {
   readonly pkg: string | null;
 }
 
-// `from "@ashara/x"`, side-effect `import "@ashara/x"`, and type-position or
-// dynamic `import("@ashara/x")`, each with an optional subpath ("@ashara/x/sub").
-export const PACKAGE_IMPORT_RE = /\b(?:from|import)\s*\(?\s*["'](@ashara\/([a-z][a-z0-9-]*)(?:\/[^"']*)?)["']/g;
+const ASHARA_SCOPE = "@ashara/";
 
-// Relative specifiers in the same positions: a path that leaves the importing
-// package reaches another package's internals without naming it.
-export const RELATIVE_IMPORT_RE = /\b(?:from|import)\s*\(?\s*["'](\.{1,2}\/[^"']*)["']/g;
+/** The package an `@ashara/<pkg>[/<sub>]` specifier names; null for any other specifier. */
+export function asharaPackageOf(specifier: string): string | null {
+  if (!specifier.startsWith(ASHARA_SCOPE)) return null;
+  const pkg = specifier.slice(ASHARA_SCOPE.length).split("/")[0];
+  return /^[a-z][a-z0-9-]*$/.test(pkg) ? pkg : null;
+}
 
-export function scanLines(content: string, re: RegExp, onMatch: (line: number, match: RegExpExecArray) => void): void {
-  const lines = content.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    let match: RegExpExecArray | null;
-    re.lastIndex = 0;
-    while ((match = re.exec(lines[i])) !== null) {
-      onMatch(i + 1, match);
-    }
-  }
+export function isRelativeSpecifier(specifier: string): boolean {
+  return specifier.startsWith("./") || specifier.startsWith("../");
+}
+
+/** An edge of a file whose specifier is a literal, spelled whole. */
+interface StaticEdge {
+  readonly line: number;
+  readonly specifier: string;
+  readonly edge: ImportEdge;
+}
+
+/** Every edge of the file whose specifier is a literal. */
+export function staticEdges(filePath: string, content: string): StaticEdge[] {
+  return importEdges(filePath, content).flatMap((edge) => (edge.target.kind === "static" ? [{ line: edge.line, specifier: edge.target.specifier, edge }] : []));
+}
+
+/** The specifier a report shows for an edge: its literal, its template prefix, or that it is computed. */
+export function shownTarget(target: ImportTarget): string {
+  if (target.kind === "static") return target.specifier;
+  return target.kind === "template" ? `\`${target.prefix}\${...}\`` : "<computed specifier>";
+}
+
+/**
+ * Whether an edge may load `@ashara/<entry>` (any `@ashara/` module when `entry` is undefined): a
+ * literal names one module, a template prefix every module it begins, and a computed target any.
+ */
+export function mayNameAshara(target: ImportTarget, entry?: string): boolean {
+  if (target.kind === "computed") return true;
+  const whole = entry === undefined ? ASHARA_SCOPE : `${ASHARA_SCOPE}${entry}`;
+  if (target.kind === "template") return whole.startsWith(target.prefix) || target.prefix.startsWith(entry === undefined ? whole : `${whole}/`);
+  return entry === undefined ? asharaPackageOf(target.specifier) !== null : target.specifier === whole;
+}
+
+/** Whether an edge may load package `@ashara/<pkg>`, its root entry or any subpath of it. */
+export function mayLoadAsharaPackage(target: ImportTarget, pkg: string): boolean {
+  return target.kind === "static" ? asharaPackageOf(target.specifier) === pkg : mayNameAshara(target, pkg);
 }
 
 export function extractAsharaImports(
@@ -98,20 +128,20 @@ export function extractAsharaImports(
   fromPkg: string,
 ): ImportRef[] {
   const refs: ImportRef[] = [];
-
-  scanLines(content, PACKAGE_IMPORT_RE, (line, match) => {
-    refs.push({ line, specifier: match[1], pkg: match[2] });
-  });
-
-  scanLines(content, RELATIVE_IMPORT_RE, (line, match) => {
-    const specifier = match[1];
+  for (const { line, specifier } of staticEdges(filePath, content)) {
+    const pkg = asharaPackageOf(specifier);
+    if (pkg !== null) {
+      refs.push({ line, specifier, pkg });
+      continue;
+    }
+    // A relative path that leaves the importing package reaches another package's internals without naming it.
+    if (!isRelativeSpecifier(specifier)) continue;
     const target = path.relative(packagesDir, path.resolve(path.dirname(filePath), specifier));
     const targetPkg = target.split(path.sep)[0];
-    if (targetPkg === fromPkg) return;
+    if (targetPkg === fromPkg) continue;
     const escapes = target === "" || targetPkg === ".." || path.isAbsolute(target);
     refs.push({ line, specifier, pkg: escapes ? null : targetPkg });
-  });
-
+  }
   return refs;
 }
 
@@ -127,57 +157,46 @@ interface NamedImport {
   readonly names: readonly string[] | null;
 }
 
-// A statement whose clause is a brace list, a namespace or a default binding. Anything else that
-// carries an `@ashara/` specifier (a side-effect or dynamic import, a clause this does not parse)
-// is left unaccounted and reported, never assumed harmless.
-const NAMED_STATEMENT_RE =
-  /\b(?:import|export)\s+(?:type\s+)?(\{[^}]*\}|\*\s+as\s+[\w$]+|\*|[\w$]+(?:\s*,\s*(?:\{[^}]*\}|\*\s+as\s+[\w$]+))?)\s*from\s*(["'](@ashara\/([a-z][a-z0-9-]*)(?:\/[^"']*)?)["'])/g;
-export const ASHARA_LITERAL_RE = /["'](@ashara\/([a-z][a-z0-9-]*)(?:\/[^"']*)?)["']/g;
+/** An edge that may load an `@ashara/` module and that no brace, namespace or default clause accounts for. */
+interface UnaccountedImport {
+  readonly line: number;
+  readonly specifier: string;
+  readonly target: ImportTarget;
+}
+
+/**
+ * The file's `@ashara/` imports and re-exports by statement, and every other edge that may load an
+ * `@ashara/` module: a side-effect import, a call (a dynamic import, a require, a vitest loader), a
+ * type-position import, an import-equals, and an edge whose target no literal spells whole. Those
+ * are left unaccounted and reported, never assumed harmless.
+ */
+export function extractNamedImports(filePath: string, content: string): { imports: NamedImport[]; unaccounted: UnaccountedImport[] } {
+  const imports: NamedImport[] = [];
+  const unaccounted: UnaccountedImport[] = [];
+  for (const edge of importEdges(filePath, content)) {
+    if (!mayNameAshara(edge.target)) continue;
+    const pkg = edge.target.kind === "static" ? asharaPackageOf(edge.target.specifier) : null;
+    const statement = (edge.form === "import" || edge.form === "export") && edge.clause.kind !== "none";
+    if (edge.target.kind === "static" && pkg !== null && statement) {
+      const names = edge.clause.kind === "names" ? edge.clause.names.map((entry) => entry.name) : null;
+      imports.push({ line: edge.line, specifier: edge.target.specifier, pkg, names });
+      continue;
+    }
+    unaccounted.push({ line: edge.line, specifier: shownTarget(edge.target), target: edge.target });
+  }
+  return { imports, unaccounted };
+}
 
 export function lineAt(content: string, offset: number): number {
   return content.slice(0, offset).split("\n").length;
 }
 
-function clauseNames(clause: string): string[] | null {
-  if (!clause.startsWith("{")) return null;
-  return clause
-    .slice(1, -1)
-    .split(",")
-    .map((entry) => entry.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim())
-    .filter((name) => name !== "");
-}
-
-/** The file's `@ashara/` imports by statement, and the line of every `@ashara/` specifier no statement accounts for. */
-export function extractNamedImports(content: string): { imports: NamedImport[]; unaccounted: { line: number; specifier: string }[] } {
-  const imports: NamedImport[] = [];
-  const accounted = new Set<number>();
-  for (const match of content.matchAll(NAMED_STATEMENT_RE)) {
-    const literalOffset = match.index + match[0].length - match[2].length;
-    accounted.add(literalOffset);
-    imports.push({ line: lineAt(content, literalOffset), specifier: match[3], pkg: match[4], names: clauseNames(match[1]) });
-  }
-  const unaccounted: { line: number; specifier: string }[] = [];
-  for (const match of content.matchAll(ASHARA_LITERAL_RE)) {
-    if (!accounted.has(match.index)) unaccounted.push({ line: lineAt(content, match.index), specifier: match[1] });
-  }
-  return { imports, unaccounted };
-}
-
-// A relative `import type` or `export type` statement: erased at runtime, so it hands no rule over.
-// An inline `{ type X }` modifier is not matched, so such an import is followed (fail closed).
-const TYPE_ONLY_RELATIVE_RE = /\b(?:import|export)\s+type\s+(?:\{[^}]*\}|\*\s+as\s+[\w$]+|[\w$]+)\s*from\s*(["']\.{1,2}\/[^"']*["'])/g;
-export const RELATIVE_LITERAL_RE = /\b(?:from|import)\s*\(?\s*(["'](\.{1,2}\/[^"']*)["'])/g;
-
-/** Every relative specifier in the file that is not the tail of a type-only statement. */
-export function valueRelativeImports(content: string): { line: number; specifier: string }[] {
-  const typeOnly = new Set<number>();
-  for (const match of content.matchAll(TYPE_ONLY_RELATIVE_RE)) typeOnly.add(match.index + match[0].length - match[1].length);
-  const found: { line: number; specifier: string }[] = [];
-  for (const match of content.matchAll(RELATIVE_LITERAL_RE)) {
-    const offset = match.index + match[0].length - match[1].length;
-    if (!typeOnly.has(offset)) found.push({ line: lineAt(content, offset), specifier: match[2] });
-  }
-  return found;
+/**
+ * Every relative specifier of the file whose statement is not erased at runtime. An inline
+ * `{ type X }` entry does not erase its statement, so such an import is followed (fail closed).
+ */
+export function valueRelativeImports(filePath: string, content: string): { line: number; specifier: string }[] {
+  return staticEdges(filePath, content).filter(({ specifier, edge }) => isRelativeSpecifier(specifier) && !edge.typeOnly);
 }
 
 /** The scanned file a relative specifier names, under TypeScript's `.js`-for-`.ts` convention; null when none is. */
