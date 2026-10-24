@@ -256,11 +256,10 @@ describe("routing over the migrated catalog and config/models.toml, per profile 
     Object.fromEntries(SITES.map((site) => [site, LEVELS.map((level) => resolvedAt(gateway, site, level))]));
   const everySite = (levels: readonly string[]) => Object.fromEntries(SITES.map((site) => [site, levels]));
 
-  test('"deepseek": every level up to Strong is deepseek-flash where it reasons; at suite-review, which calls it without reasoning, only Light', async () => {
-    expect(table(await gatewayFor(["deepseek"], true))).toEqual({
-      ...everySite(["deepseek-flash", "deepseek-flash", "deepseek-flash", "NoProviderAvailableError"]),
-      "suite-review": ["deepseek-flash", "NoProviderAvailableError", "NoProviderAvailableError", "NoProviderAvailableError"],
-    });
+  test('"deepseek": every level up to Strong is deepseek-flash at every site, suite-review included, since it reasons at each', async () => {
+    expect(table(await gatewayFor(["deepseek"], true))).toEqual(
+      everySite(["deepseek-flash", "deepseek-flash", "deepseek-flash", "NoProviderAvailableError"]),
+    );
   });
 
   test('"deepseek": a Strong structured call whose attempts all fail ends in StructuredOutputExhausted, with no Frontier tier to escalate to', async () => {

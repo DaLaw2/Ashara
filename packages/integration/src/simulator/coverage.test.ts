@@ -70,6 +70,8 @@ describe("modelPathOf", () => {
   it("names nothing for a call answered as asked", () => {
     expect(row("agent-runner", "tool-calls", "ok", 200, null)).toBeNull();
     expect(row("decomposition", "stop", "ok", 200, null)).toBeNull();
+    // A review that reasoned through nearly its whole bound and stopped on its own answered.
+    expect(row("suite-review", "stop", "ok", 8000, 7900)).toBeNull();
     // A turn that stopped with output but no tool call is a refusal or a plain stop, not one of these.
     expect(row("agent-runner", "stop", "ok", 200, null)).toBeNull();
   });

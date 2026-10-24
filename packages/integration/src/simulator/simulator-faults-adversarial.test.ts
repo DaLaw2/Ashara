@@ -94,6 +94,24 @@ describe("lifecycle simulator, directed", () => {
     expect(result.outcome.kind).toBe("accepted");
   }, 90_000);
 
+  // A suite review that reasons through nearly its whole bound and still answers is an answer, not a
+  // failed attempt.
+  it("takes a suite review that reasons to its bound and answers", async (ctx) => {
+    const result = await adversarial(ctx, [draw("model.suite-review.reasoning-heavy", 1)]);
+    expectReached(result, ["suite-review reasoning-heavy"], [], []);
+    expect(result.trace).not.toContain("model suite-review reasoning-exhausted");
+    expect([...result.coverage.models]).not.toContain("structured:reasoning-exhausted");
+    expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
+
+  // One that spends the whole bound reasoning is re-asked by the ladder, and the re-ask, reasoning as
+  // near the bound, answers.
+  it("re-asks a suite review that only reasons, and takes the re-ask that reasons to its bound and answers", async (ctx) => {
+    const result = await adversarial(ctx, [draw("model.suite-review.reasoning-exhausted", 1), draw("model.suite-review.reasoning-heavy", 1)]);
+    expectReached(result, ["suite-review reasoning-exhausted", "suite-review reasoning-heavy"], ["structured:reasoning-exhausted"], []);
+    expect(result.outcome.kind).toBe("accepted");
+  }, 90_000);
+
   // A review that rejects a correct check as outside the vision, quoting as missing the
   // very text its cited item states; Z0 finds the clause in that text, discards the rejection and
   // asks again, so nothing reopens the check (I3's review clause).

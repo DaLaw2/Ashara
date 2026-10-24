@@ -176,15 +176,17 @@ export class LLMGateway {
   }
 
   /**
-   * The thinking switch for a request to `target` at `site` (none for a provider
+   * The thinking switch for a request to `target` routed by `site` (none for a provider
    * type that takes no switch), and the output bound it is sent with: the
-   * caller's `answerTokens`, plus a reasoning allowance, sized by `promptBytes`, when thinking is on.
+   * caller's `answerTokens`, plus a reasoning allowance, sized by `promptBytes` and `scope.site`,
+   * when thinking is on. The allowance keys on the call's own site, not the routing site: an
+   * escalated attempt is routed as "escalation" but reasons over the same material as its call.
    */
-  private thinkingFor(target: CallTarget, site: string | undefined, answerTokens: number, promptBytes: number) {
+  private thinkingFor(target: CallTarget, site: string | undefined, scope: CallScope, answerTokens: number, promptBytes: number) {
     const mode = thinkingModeFor(this.thinking, site);
     return {
       providerOptions: thinkingProviderOptions(target.providerType, mode),
-      budget: outputBudget(target.providerType, mode, answerTokens, promptBytes),
+      budget: outputBudget(target.providerType, mode, answerTokens, promptBytes, scope.site),
     };
   }
 
@@ -580,7 +582,7 @@ export class LLMGateway {
       await wireSchemaOf(request.schema),
     );
     const requestBytes = utf8Bytes(request.prompt, request.systemPrompt, schemaText(request.schema));
-    const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens, requestBytes);
+    const { providerOptions, budget } = this.thinkingFor(resolved, site, scope, request.maxTokens, requestBytes);
     const size: RequestSize = { requestBytes, maxOutputTokens: budget.maxOutputTokens };
     // The SDK validates the response against request.schema once and types the object by it.
     const call = (): Promise<GenerateObjectResult<T>> =>
@@ -655,7 +657,7 @@ export class LLMGateway {
     // leaves implicit is still stated.
     const prompt = textStructuredPrompt(request.prompt, request.schema);
     const requestBytes = utf8Bytes(prompt, request.systemPrompt);
-    const { providerOptions, budget } = this.thinkingFor(resolved, site, request.maxTokens, requestBytes);
+    const { providerOptions, budget } = this.thinkingFor(resolved, site, scope, request.maxTokens, requestBytes);
     const params: Parameters<typeof generateText>[0] = {
       model: resolved.provider,
       prompt,

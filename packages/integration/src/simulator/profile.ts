@@ -81,6 +81,8 @@ export interface AdversaryRates {
   readonly emptyTurn: number;
   /** A call spends its whole output bound on reasoning and returns no answer. */
   readonly reasoningExhausted: number;
+  /** A structured call reasons through most of its output bound and still answers within it. */
+  readonly reasoningHeavy: number;
   /**
    * The provider rejects an agent turn as longer than the model's context window (HTTP 400, its error data says so).
    */
@@ -107,6 +109,7 @@ const COOPERATIVE_RESPONSES = {
   truncatedTurn: 0,
   emptyTurn: 0,
   reasoningExhausted: 0,
+  reasoningHeavy: 0,
   contextOverflow: 0,
   turnCapMidEdit: 0,
   truncatedStructured: 0,
@@ -204,6 +207,7 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     truncatedTurn: 0.02,
     emptyTurn: 0.02,
     reasoningExhausted: 0.02,
+    reasoningHeavy: 0,
     contextOverflow: 0,
     turnCapMidEdit: 0.05,
     truncatedStructured: 0.02,
@@ -241,6 +245,7 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     truncatedTurn: 0.04,
     emptyTurn: 0.04,
     reasoningExhausted: 0.04,
+    reasoningHeavy: 0,
     contextOverflow: 0,
     turnCapMidEdit: 0.1,
     truncatedStructured: 0.04,
@@ -280,6 +285,7 @@ const ADVERSARY: Readonly<Record<Profile, AdversaryRates>> = {
     truncatedTurn: 0.06,
     emptyTurn: 0.06,
     reasoningExhausted: 0.05,
+    reasoningHeavy: 0.05,
     contextOverflow: 0.04,
     turnCapMidEdit: 0.08,
     truncatedStructured: 0.05,

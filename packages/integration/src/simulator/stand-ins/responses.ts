@@ -90,6 +90,31 @@ export function cutAtBound(content: LanguageModelV4Content[], bound: number): La
   };
 }
 
+/** About four characters to a token, how the stand-ins size an answer's text against the bound. */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * An answer given after reasoning through all of the output bound the answer leaves but one
+ * token: it stops on its own, and the reasoning count is reported as {@link reasoningOnly}'s is.
+ */
+function reasonedToTheBound(text: string, bound: number): LanguageModelV4GenerateResult {
+  const answer = Math.min(bound, Math.ceil(text.length / CHARS_PER_TOKEN));
+  const reasoning = Math.max(0, bound - answer - 1);
+  return {
+    content: [
+      { type: "reasoning", text: "Let me think about every part of this carefully before answering." },
+      { type: "text", text },
+    ],
+    finishReason: { unified: "stop", raw: "stop" },
+    usage: {
+      inputTokens: USAGE.inputTokens,
+      outputTokens: { total: answer + reasoning, text: answer, reasoning },
+      raw: { completion_tokens: answer + reasoning, completion_tokens_details: { reasoning_tokens: reasoning } },
+    },
+    warnings: [],
+  };
+}
+
 /**
  * The whole output bound spent on reasoning, no answer: the reasoning count
  * in the wire format a Chat Completions provider reports it in, where the gateway reads it.
@@ -176,7 +201,7 @@ export function assistantTurns(options: LanguageModelV4CallOptions): number {
 /**
  * One structured answer, or one of the response-level misbehaviours a provider shows: output
  * that does not parse, no content, the whole bound spent on reasoning, or the answer cut at the
- * bound mid-object.
+ * bound mid-object; or the answer given after reasoning through nearly all of the bound.
  */
 export async function structuredAnswer<T>(
   context: StandInContext,
@@ -202,6 +227,11 @@ export async function structuredAnswer<T>(
   if (tape.chance(`model.${site}.truncated`, rates.truncatedStructured)) {
     onModelCall({ site, action: "truncated" });
     return cutAtBound([{ type: "text", text: firstHalf(JSON.stringify(value)) }], outputBoundOf(options));
+  }
+  if (tape.chance(`model.${site}.reasoning-heavy`, rates.reasoningHeavy)) {
+    onModelCall({ site, action: "reasoning-heavy" });
+    delivered?.(value);
+    return reasonedToTheBound(JSON.stringify(value), outputBoundOf(options));
   }
   onModelCall({ site, action: "answered" });
   delivered?.(value);

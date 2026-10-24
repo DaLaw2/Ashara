@@ -1,6 +1,10 @@
+import { createDeepSeek } from "@ai-sdk/deepseek";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { extractUsage, parseStructuredText, textStructuredPrompt } from "./gateway.js";
+import { LLMGateway, extractUsage, parseStructuredText, textStructuredPrompt } from "./gateway.js";
+import { ROUTING_RULES } from "./routing-rules.js";
+import { loadThinkingPolicyFromToml } from "./thinking.js";
+import type { KnownLLMSite, ModelConfig, ProviderRequest } from "./types.js";
 describe("extractUsage", () => {
   test("reads OpenAI Responses cache reads from the raw usage", () => {
     const { reported } = extractUsage({
@@ -81,4 +85,61 @@ describe("a structured request to a provider that answers in text", () => {
     if (parsed.ok) return expect.unreachable("a missing property does not validate");
     expect(parsed).toMatchObject({ errorKind: "SchemaMismatch", errors: ["problems.0.evidence: Invalid input: expected string, received undefined"] });
   });
+});
+
+describe("the reasoning allowance of an escalated attempt", () => {
+  const FLASH: ModelConfig = {
+    id: "deepseek-flash-like",
+    apiModelId: "deepseek-flash-like",
+    provider: "deepseek",
+    capabilityLevel: "Strong", thinkingOffCapabilityLevel: "Light",
+    inputCostPer1M: 0.1,
+    outputCostPer1M: 0.4,
+    maxContextTokens: 1_000_000,
+    cacheReadCostPer1M: null,
+    cacheWriteCostPer1M: null,
+    priceWindows: [],
+    priceTiers: [], datedPrices: [],
+  };
+  const REPO_MODELS_TOML = new URL("../../../config/models.toml", import.meta.url).pathname;
+  // The most deepseek-flash reasoned on one suite review.
+  const MOST_SUITE_REVIEW_REASONING = 51_729;
+
+  class Refused extends Error {}
+
+  async function admittedBound(site: KnownLLMSite): Promise<ProviderRequest> {
+    const admitted: ProviderRequest[] = [];
+    const gateway = new LLMGateway(
+      {
+        providers: [{ name: "deepseek", providerType: "deepseek", apiKey: "k", models: [FLASH], enabled: true }],
+        defaultProvider: "deepseek",
+        contextOverflow: { statuses: [400], codes: ["context_length_exceeded"], phrases: [] },
+        thinking: loadThinkingPolicyFromToml(REPO_MODELS_TOML),
+      },
+      () => new Date("2026-10-24T12:00:00Z"),
+      (provider, modelConfig) => createDeepSeek({ apiKey: provider.apiKey })(modelConfig.apiModelId),
+      ROUTING_RULES,
+    );
+    const call = gateway
+      .gated("suite-review", {
+        admit: async (request) => {
+          admitted.push(request);
+          throw new Refused("never sent");
+        },
+        settle: async () => {},
+      })
+      .generateStructured({ prompt: "review", schema: z.object({ ok: z.boolean() }), maxTokens: 16_200, site, capability: "Strong", abortSignal: new AbortController().signal });
+    await expect(call).rejects.toBeInstanceOf(Refused);
+    const [request] = admitted;
+    if (request === undefined) return expect.unreachable("the gate saw no request");
+    return request;
+  }
+
+  test.each<KnownLLMSite>(["suite-review", "escalation"])(
+    "a suite review routed as %s to deepseek-flash keeps the suite-review allowance, with headroom over the most reasoning seen",
+    async (site) => {
+      const request = await admittedBound(site);
+      expect(request.maxOutputTokens - 16_200).toBeGreaterThanOrEqual(Math.ceil(MOST_SUITE_REVIEW_REASONING * 1.25));
+    },
+  );
 });

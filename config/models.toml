@@ -67,9 +67,9 @@
 [routing.profiles."deepseek"]
 # Intentionally empty: a deepseek-only deployment gets pure capability-level
 # routing. Its one model is deepseek-flash, graded Strong with thinking
-# on (below): Light, Medium and Strong requests resolve to it. At suite-review,
-# where thinking is off, it is graded Light, so no judge of Strong check work is
-# offered there and the review is not made. Nothing lower is
+# on (below), at every site, suite-review included: Light, Medium and Strong
+# requests resolve to it, and it judges Strong check work at suite-review, where
+# no model is graded above it. Nothing lower is
 # substituted for Frontier: a task the planner grades Frontier fails with
 # NoProviderAvailableError, and a Strong structured call whose attempts all
 # fail has no tier to escalate to, so it ends in StructuredOutputExhausted with
@@ -111,11 +111,13 @@
 # The review of a plan revision's check suites: one structured
 # call per review, reading every stored suite with the vision. A review judges
 # the check work, so it asks for a judge one tier above the judged tier, else
-# at it. Each tier goes to a model graded at it as this site calls it, with
-# thinking off: Frontier claude-opus-5-5, Strong and Medium claude-sonnet-5-5,
-# Light deepseek-flash, which thinking off grades Light here. A tier mapped to a
-# model graded below it would leave the work it judges with no judge, and the
-# gateway refuses to start on one.
+# at it. Each tier goes to a model graded at or above it as this site calls it,
+# with thinking on: Frontier claude-opus-5-5, Strong and Medium claude-sonnet-5-5,
+# Light deepseek-flash (Strong as called). A second opinion from another family
+# than a Claude first reviewer's is not routed by this table: it goes to
+# deepseek-flash, graded Strong here. A tier mapped to a model graded below it
+# would leave the work it judges with no judge, and the gateway refuses to start
+# on one.
 "suite-review" = { Frontier = "claude-opus-5-5", Strong = "claude-sonnet-5-5", Medium = "claude-sonnet-5-5", Light = "deepseek-flash" }
 # An escalation goes up a level: the base sites run deepseek-flash (Strong as called), so the
 # escalation is the Frontier Claude model, never a lateral Strong one.
@@ -127,16 +129,19 @@
 # thinking.type). Every other provider type gets no option, whatever this
 # table says.
 #
-# On at every routing site but suite-review: a model's level is graded as
-# Ashara calls it, and deepseek-flash is Strong only with thinking on. The
-# risk: deepseek-flash's reasoning tokens count against maxTokens, so a
-# structured request can spend its whole bound reasoning and return no text
-# (StructuredOutputTruncated). The gateway therefore sends a request with
-# thinking on with a reasoning allowance added to its bound (model-access
-# thinking.ts outputBudget), priced into its worst-case cost. A site-less call
-# keeps the default, off. suite-review is off because its DeepSeek calls with
-# thinking on spend their whole output bound on reasoning and return no answer,
-# even at the minimum reasoning allowance.
+# On at every routing site: a model's level is graded as Ashara calls it, and
+# deepseek-flash is Strong only with thinking on. The risk: deepseek-flash's
+# reasoning tokens count against maxTokens, so a structured request can spend
+# its whole bound reasoning and return no text (StructuredOutputTruncated). The
+# gateway therefore sends a request with thinking on with a reasoning allowance
+# added to its bound (model-access thinking.ts outputBudget), priced into its
+# worst-case cost. deepseek-flash reasons up to about 52K tokens on one suite
+# review, so a suite review's allowance is at least 64K (65,536), its escalated
+# attempts included (the allowance keys on the call's site, not the routing
+# site), where every other call's is at least 32K: held to 32K a review
+# spends its whole bound reasoning and answers nothing, and 64K leaves about a
+# quarter more than the most a review was seen to reason. A site-less call keeps
+# the default, off.
 #
 # `default` is required when this table is present; [thinking.sites] keys are
 # the routing sites ("escalation" covers every escalated ladder attempt). A site
@@ -152,7 +157,7 @@ default = "off"
 "decomposition" = "on"
 "liaison-intake" = "on"
 "roster" = "on"
-"suite-review" = "off"
+"suite-review" = "on"
 "escalation" = "on"
 
 # =============================================================================

@@ -431,7 +431,7 @@ describe("ProviderRegistry.resolveJudge", () => {
   });
 });
 
-// The catalog's own grades and base prices, and the deployment's config/models.toml: suite-review calls with thinking off.
+// The catalog's own grades and base prices, and the deployment's config/models.toml: suite-review calls with thinking on.
 describe("a suite review's judge and second opinion over the shipped routing profiles", () => {
   const graded = (id: string, provider: string, on: ModelConfig["capabilityLevel"], off: ModelConfig["capabilityLevel"], inputCostPer1M: number, outputCostPer1M: number): ModelConfig =>
     ({ ...MODEL, id, apiModelId: id, provider, capabilityLevel: on, thinkingOffCapabilityLevel: off, inputCostPer1M, outputCostPer1M, maxContextTokens: 1_000_000 });
@@ -470,9 +470,9 @@ describe("a suite review's judge and second opinion over the shipped routing pro
     },
   );
 
-  test("anthropic+deepseek: no other family is graded at Strong where thinking is off, so the second opinion falls to the same family", () => {
+  test("anthropic+deepseek: deepseek-flash, graded Strong where it reasons, gives Strong work its other-family second opinion", () => {
     const registry = deployed("anthropic+deepseek");
-    expect(registry.resolveSecondOpinion({ judges: "Strong" }, { avoid: firstReviewer, strength: "other-family" }, "suite-review")).toBeNull();
+    expect(registry.resolveSecondOpinion({ judges: "Strong" }, { avoid: firstReviewer, strength: "other-family" }, "suite-review")?.modelConfig.id).toBe("deepseek-flash");
   });
 
   test.each(["anthropic", "anthropic+deepseek"] as const)("%s: work at Medium has a judge, graded above it", (combo) => {

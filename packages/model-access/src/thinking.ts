@@ -85,16 +85,28 @@ export function thinkingProviderOptions(
 const MIN_REASONING_ALLOWANCE_TOKENS = 32_768;
 
 /**
+ * The sites whose one-shot request reasons past {@link MIN_REASONING_ALLOWANCE_TOKENS}
+ * however small its prompt, and the least allowance each gets instead. A suite review
+ * reads every check of a revision at once: deepseek-flash reasons up to about 52K tokens
+ * on one review, and a review held to the general minimum spends its whole bound
+ * reasoning and answers nothing. DeepSeek's whole 64K thinking-mode default, on top of
+ * the answer, leaves about a quarter more than the most a review was seen to reason.
+ */
+const SITE_MIN_REASONING_ALLOWANCE_TOKENS: Partial<Record<KnownLLMSite, number>> = { "suite-review": 65_536 };
+
+/**
  * Reasoning tokens allowed per byte of a one-shot request's prompt, above the
- * minimum, for every site that runs with thinking on (decomposition among
- * them). The suite review runs with thinking off (config/models.toml)
- * and gets no allowance: a larger allowance does not stop it spending
- * its whole bound on reasoning. How much reasoning any site needs
- * as its prompt grows is unmeasured. One token per byte is about four per
- * prompt token. The worst-case price follows, because
+ * site's minimum, for every site that runs with thinking on. How much reasoning
+ * any site needs as its prompt grows is unmeasured. One token per byte is about
+ * four per prompt token. The worst-case price follows, because
  * Finance prices the bound this returns.
  */
 const REASONING_TOKENS_PER_PROMPT_BYTE = 1;
+
+function minReasoningAllowance(site: string | undefined): number {
+  if (site === undefined || !isKnownSite(site)) return MIN_REASONING_ALLOWANCE_TOKENS;
+  return SITE_MIN_REASONING_ALLOWANCE_TOKENS[site] ?? MIN_REASONING_ALLOWANCE_TOKENS;
+}
 
 /** DeepSeek's documented `max_tokens` ceiling: "between 1 and 384K (393216)" (same page). */
 const DEEPSEEK_MAX_OUTPUT_TOKENS = 393_216;
@@ -113,11 +125,19 @@ export interface OutputBudget {
  * {@link thinkingProviderOptions} sends no switch to keep the caller's bound.
  * `promptBytes` is the material the request reasons over; an agent turn passes
  * 0, since its prompt is mostly the history earlier turns already reasoned over.
+ * `site` is the call's own site and sets the allowance's minimum: an escalated attempt passes the
+ * site of the call it escalates, not "escalation", since it reasons over the same material.
  * The bound never exceeds DeepSeek's documented ceiling.
  */
-export function outputBudget(providerType: ProviderType, mode: ThinkingMode, answerTokens: number, promptBytes: number): OutputBudget {
+export function outputBudget(
+  providerType: ProviderType,
+  mode: ThinkingMode,
+  answerTokens: number,
+  promptBytes: number,
+  site: string | undefined,
+): OutputBudget {
   if (providerType !== "deepseek" || mode !== "on") return { maxOutputTokens: answerTokens, reasoningAllowance: 0 };
-  const allowance = Math.max(MIN_REASONING_ALLOWANCE_TOKENS, Math.ceil(promptBytes * REASONING_TOKENS_PER_PROMPT_BYTE));
+  const allowance = Math.max(minReasoningAllowance(site), Math.ceil(promptBytes * REASONING_TOKENS_PER_PROMPT_BYTE));
   const maxOutputTokens = Math.min(answerTokens + allowance, DEEPSEEK_MAX_OUTPUT_TOKENS);
   return { maxOutputTokens, reasoningAllowance: maxOutputTokens - answerTokens };
 }
@@ -128,7 +148,7 @@ export function outputBudget(providerType: ProviderType, mode: ThinkingMode, ans
  * check (config.ts) both read it, so a window boot admits is one a turn can fit input in.
  */
 export function turnOutputBudget(providerType: ProviderType, mode: ThinkingMode): OutputBudget {
-  return outputBudget(providerType, mode, TURN_MAX_OUTPUT_TOKENS, 0);
+  return outputBudget(providerType, mode, TURN_MAX_OUTPUT_TOKENS, 0, undefined);
 }
 
 /** The largest output a turn on a provider type reserves, and the site whose mode sets it. */
