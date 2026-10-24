@@ -6,12 +6,13 @@ import { dependencies, planRepairs, planRevisions, projectPlans, workItems } fro
 import type { DbHandle } from "@ashara/db";
 import { givenUpItem, goalTaskSql, inCurrentPlan, liveInCurrentPlan, productScaffoldTask, projectHalted, reviewTask } from "./predicates.js";
 import { SETTLED_WORK_ITEM_STATUSES } from "./work-item-language/index.js";
+import { lockProjectRow } from "./repositories/project-lock.js";
 
 // Delivery's published reads: what another context reads of the board (work_items, its dependency
 // edges, plan revisions and repairs, the planning record) goes through these, never a query of Delivery's tables of its
 // own. Each returns Delivery's rows as stored, its jsonb unread; the reader parses them in Delivery's
-// work-item language. This module loads nothing of Delivery but its predicates and its status
-// vocabulary, which load nothing else, so a context Delivery itself reads can import it without a
+// work-item language. This module loads nothing of Delivery but its predicates, its status
+// vocabulary and its project lock (lockProjectRow), which load nothing else, so a context Delivery itself reads can import it without a
 // cycle at load time; the planning outcomes the Liaison reports on are re-exported as types alone,
 // which load nothing.
 
@@ -392,13 +393,18 @@ export async function checkTasksOfReview(db: DbHandle, reviewTaskId: string): Pr
 }
 
 /**
- * Locks the task's row until the caller's transaction ends; false when there is no such task. The
- * port by which a context whose own invariant is per task (a task's check revisions) serializes on
- * the task, inside its own transaction.
+ * Locks the task's project row and then the task's row until the caller's transaction ends; false
+ * when there is no such task. The port by which a context whose own invariant is per task (a task's
+ * check revisions) serializes on the task, inside its own transaction. The project row comes first,
+ * in Delivery's one lock order (lockProjectRow), so the caller never holds the task's row while it
+ * waits on its project's.
  */
 export type LockTask = (tx: DbHandle, taskId: string) => Promise<boolean>;
 
 export const lockTask: LockTask = async (tx, taskId) => {
+  const [task] = await tx.select({ projectId: workItems.projectId }).from(workItems).where(eq(workItems.id, taskId));
+  if (task === undefined) return false;
+  await lockProjectRow(tx, task.projectId);
   const locked = await tx.select({ id: workItems.id }).from(workItems).where(eq(workItems.id, taskId)).for("update");
   return locked.length === 1;
 };

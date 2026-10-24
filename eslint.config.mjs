@@ -506,6 +506,27 @@ export default tseslint.config(
     },
   },
   {
+    // A fault that is not a task's work is charged (counted, the budget read, the project halted past
+    // it) by chargeInfrastructureFault alone, in the transaction that holds the task's project row and
+    // then its row locked, and only while the task is still in the status the charge is for. The lock
+    // that hands out the charge's ledger, and the count, are reached from there and from the adapter
+    // that builds them, never from a caller that could charge a task the owner moved meanwhile.
+    // Blind spots: a member reached through a computed key (`repo["withItemLocked"]`) or a destructured
+    // alias, and a raw UPDATE of work_items.infrastructure_faults.
+    files: ["packages/*/src/**/*.ts"],
+    ignores: ["**/*.test.ts", "packages/delivery/src/infrastructure-fault.ts", "packages/delivery/src/repositories/work-item-adapter.ts"],
+    rules: {
+      "no-restricted-properties": [
+        "error",
+        ...["withItemLocked", "recordInfrastructureFault"].map((property) => ({
+          property,
+          message:
+            "Charge outside its lock: a fault that is not a task's work is charged through chargeInfrastructureFault (packages/delivery/src/infrastructure-fault.ts), which holds the project row and then the task's row locked and charges only a task still in the status it expects.",
+        })),
+      ],
+    },
+  },
+  {
     // The dispatch and its routing take a named-parameter object past five values, so no call
     // site can swap two of the same type unseen.
     files: ["packages/delivery/src/execution/**/*.ts", "packages/delivery/src/dispatch/**/*.ts"],

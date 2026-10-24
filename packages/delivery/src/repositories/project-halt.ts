@@ -10,6 +10,7 @@ import { SPEND_CAP_ERROR_CLASS } from "../acl/finance-acl.js";
 import { HALT_KINDS, pendingRepair, projectHalted, type HaltKind } from "../predicates.js";
 import type { ProjectBlockCause } from "../project-halt.js";
 import { resetOnUnblock } from "./project-plan.js";
+import { lockProjectRow } from "./project-lock.js";
 
 // Delivery's one guard over the project halt. A project is halted
 // while it has an open project_blocks episode, which records the halt's cause; this module is the
@@ -68,16 +69,6 @@ class BlockEpisodeMissing extends Error {
     super(`cannot return project ${projectId} to work: its open block episode was ended while the project row was locked`);
     this.name = "BlockEpisodeMissing";
   }
-}
-
-/** Locks the project row for the rest of `tx`; null when there is no such project. */
-async function lockProject(tx: DbHandle, id: ProjectId): Promise<{ readonly lifecycle: string } | null> {
-  const [locked] = await tx
-    .select({ lifecycle: projects.lifecycle })
-    .from(projects)
-    .where(eq(projects.id, id))
-    .for("update");
-  return locked ?? null;
 }
 
 /**
@@ -198,7 +189,7 @@ export class ProjectHaltRepository extends ProjectRepository {
    */
   async block(id: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked"> {
     return this.db.transaction(async (tx) => {
-      if (!(await lockProject(tx, id))) throw new ProjectNotFound(id, "block the project");
+      if (!(await lockProjectRow(tx, id))) throw new ProjectNotFound(id, "block the project");
       const [atWork] = await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, id), projectAtWork()));
       if (!atWork) return "already-blocked";
       await tx.insert(projectBlocks).values({ projectId: id, ...episodeOf(cause) });
@@ -218,7 +209,7 @@ export class ProjectHaltRepository extends ProjectRepository {
         .from(projects)
         .where(and(projectActive(), noOpenStop(projects.id)))
         .orderBy(asc(projects.id))
-        .for("update");
+        .for("no key update");
       if (candidates.length === 0) return [];
       const halted = await tx
         .select({ id: projects.id })
@@ -294,7 +285,7 @@ export class ProjectHaltRepository extends ProjectRepository {
     evidence: string,
   ): Promise<"resumed" | "moved" | "unreported"> {
     return this.db.transaction(async (tx) => {
-      if (!(await lockProject(tx, id))) throw new ProjectNotFound(id, "resume the project");
+      if (!(await lockProjectRow(tx, id))) throw new ProjectNotFound(id, "resume the project");
       const open = await openEpisode(tx, id);
       if (!open || open.kind !== kind) return "moved";
       if (!open.reported) return "unreported";
@@ -320,7 +311,7 @@ export class ProjectHaltRepository extends ProjectRepository {
    */
   async unblock(id: ProjectId, by: string, reason: string): Promise<{ readonly episodeId: string }> {
     return this.db.transaction(async (tx) => {
-      const locked = await lockProject(tx, id);
+      const locked = await lockProjectRow(tx, id);
       if (!locked) throw new ProjectNotFound(id, "unblock the project");
       const open = await openEpisode(tx, id);
       if (!open) throw new ProjectNotBlocked(id, locked.lifecycle);

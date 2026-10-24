@@ -87,7 +87,6 @@ export function inertWorkItemRepo(overrides: Partial<WorkItemRepository> = {}): 
     listIdsByStatus: notExercised("workItemRepo.listIdsByStatus"),
     save: notExercised("workItemRepo.save"),
     incrementDispatchCount: notExercised("workItemRepo.incrementDispatchCount"),
-    recordInfrastructureFault: notExercised("workItemRepo.recordInfrastructureFault"),
     saveRefundedOverflow: notExercised("workItemRepo.saveRefundedOverflow"),
     recordCrashOrphan: notExercised("workItemRepo.recordCrashOrphan"),
     saveOrphanExit: notExercised("workItemRepo.saveOrphanExit"),

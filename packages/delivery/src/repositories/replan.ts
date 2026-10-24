@@ -19,6 +19,7 @@ import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { IDLE_OPEN_WORK_ITEM_STATUSES } from "../work-item-language/work-item-status.js";
 import { citesAnyOf } from "./citation.js";
 import { tasksWithoutRosterOwner } from "./first-plan.js";
+import { lockProjectRow } from "./project-lock.js";
 import { projectReportsPlans } from "./project-halt.js";
 import { recordReplanFailure as countReplanFailure, revisionWritten } from "./project-plan.js";
 import { rowToWorkItem, workItemSaveRow } from "./work-item-adapter.js";
@@ -187,8 +188,7 @@ type HoldOutcome = { readonly kind: "held"; readonly parked: number } | { readon
 export async function holdCorrection(db: DbHandle, hold: AppliedCorrection): Promise<HoldOutcome> {
   const affected = [...new Set(hold.affected)];
   if (affected.length === 0) return { kind: "no-key" };
-  const [locked] = await db.select({ id: projects.id }).from(projects).where(eq(projects.id, hold.projectId)).for("update");
-  if (!locked) return { kind: "unplanned" };
+  if ((await lockProjectRow(db, hold.projectId)) === null) return { kind: "unplanned" };
   const [planned] = await db.select({ id: projects.id }).from(projects).where(and(eq(projects.id, hold.projectId), firstPlanned(projects.id)));
   if (!planned) return { kind: "unplanned" };
   await db.insert(correctionHolds).values({ projectId: hold.projectId, visionVersion: hold.visionVersion, requestedBy: hold.requestedBy, affected });
@@ -398,12 +398,8 @@ export async function withPlanRevisionTransaction(
   const versions: readonly number[] = corrections === null ? [] : corrections.versions;
   try {
     await db.transaction(async (tx) => {
-      const [locked] = await tx
-        .select({ lifecycle: projects.lifecycle })
-        .from(projects)
-        .where(eq(projects.id, projectId))
-        .for("update");
-      if (!locked) throw new RevisionReadMoved(projectId, "the project does not exist");
+      const locked = await lockProjectRow(tx, projectId);
+      if (locked === null) throw new RevisionReadMoved(projectId, "the project does not exist");
       // Read after the lock, in its own statement: a halt committed while the lock was awaited is seen.
       const [atWork] = await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), projectAtWork()));
       if (!atWork) throw new RevisionReadMoved(projectId, `the project is ${locked.lifecycle === "active" ? "blocked" : locked.lifecycle}`);
@@ -502,7 +498,7 @@ class ProjectNotAwaitingReplan extends Error {
 /** Counts one failed attempt to revise the plan, with its error and whose failure it was; returns the count after it. */
 export async function recordReplanFailure(db: DbHandle, projectId: ProjectId, error: string, failure: "model" | "provider"): Promise<number> {
   return db.transaction(async (tx) => {
-    await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+    await lockProjectRow(tx, projectId);
     const [awaiting] = await tx
       .select({ id: projects.id })
       .from(projects)

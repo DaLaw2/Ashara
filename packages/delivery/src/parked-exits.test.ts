@@ -61,6 +61,8 @@ function run(
   lockedRead?: WorkItemRepository["findById"],
 ) {
   let faults = faultsBefore;
+  // Every write of a charge, in the order the ledger took it: what a test asserts was not charged.
+  const charged: string[] = [];
   const logger = recordingLogger();
   // Every fault escapes the step but a locked read's that a test throws, which the step contains.
   const containment = memoryStepContainment((error) => !(error instanceof LockedReadFailed));
@@ -80,7 +82,16 @@ function run(
   const workItemRepo: WorkItemRepository = inertWorkItemRepo({
     findByProjectAndStatus: async (_projectId, status) => items.filter((i) => i.status === status).map((i) => ({ ...i, events: [] })),
     findById,
-    withItemLocked: itemLockOver(lockedRead ?? findById, { recordInfrastructureFault: async () => ++faults, blockProject: block }),
+    withItemLocked: itemLockOver(lockedRead ?? findById, {
+      recordInfrastructureFault: async (id) => {
+        charged.push(`fault:${id}`);
+        return ++faults;
+      },
+      blockProject: async (projectId, cause) => {
+        charged.push(`halt:${projectId}`);
+        return block(projectId, cause);
+      },
+    }),
     listByProject: async () => items.map((i) => ({ ...i, events: [] })),
     listDependenciesByProject: async () => [],
     save: async (item, prev) => {
@@ -116,7 +127,7 @@ function run(
     containment,
     logger,
   });
-  return { released, saves, published, asked, blocks, faults: () => faults, logger, containment };
+  return { released, saves, published, asked, blocks, charged, faults: () => faults, logger, containment };
 }
 
 const repos: string[] = [];
@@ -369,11 +380,26 @@ describe("orphan_unreconciled reads main again before it leaves Blocked", () => 
     mkdirSync(join(unreadable, ".git"));
     const items = [blocked(unreconciled)];
     const abandon = (): void => void items.splice(0, 1, ...items.map((each) => ({ ...each, status: "Abandoned" as const })));
-    const { released, saves, blocks, faults } = run(items, false, notExercised("recordMergeCommit"), unreadable, undefined, 3, abandon);
+    const { released, saves, blocks, charged, faults } = run(items, false, notExercised("recordMergeCommit"), unreadable, undefined, 3, abandon);
 
     expect(await released).toBe(0);
+    expect(charged).toEqual([]);
     expect(saves).toEqual([]);
     expect(faults()).toBe(3);
+    expect(blocks).toEqual([]);
+  });
+
+  test("main unread and the task read Abandoned under the charge's lock only: the ledger takes no write", async () => {
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    repos.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const item = blocked(unreconciled);
+    const abandonedUnderLock = async (): Promise<WorkItem> => ({ ...item, status: "Abandoned", events: [] });
+    const { released, saves, blocks, charged } = run([item], false, notExercised("recordMergeCommit"), unreadable, undefined, 3, undefined, abandonedUnderLock);
+
+    expect(await released).toBe(0);
+    expect(charged).toEqual([]);
+    expect(saves).toEqual([]);
     expect(blocks).toEqual([]);
   });
 
@@ -473,8 +499,9 @@ describe("a task held for the client's answer: its question is posted from the h
     mkdirSync(join(unreadable, ".git"));
     const items = [blocked(held)];
     const abandon = (): void => void items.splice(0, 1, ...items.map((each) => ({ ...each, status: "Abandoned" as const })));
-    const { released, saves, blocks, faults } = run(items, false, notExercised("recordMergeCommit"), unreadable, { askable: true, answered: true }, 3, abandon);
+    const { released, saves, blocks, charged, faults } = run(items, false, notExercised("recordMergeCommit"), unreadable, { askable: true, answered: true }, 3, abandon);
     expect(await released).toBe(0);
+    expect(charged).toEqual([]);
     expect(saves).toEqual([]);
     expect(blocks).toEqual([]);
     expect(faults()).toBe(3);

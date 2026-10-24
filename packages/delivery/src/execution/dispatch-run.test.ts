@@ -382,9 +382,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         row = copy(item);
       },
       incrementDispatchCount: async () => 1,
-      recordInfrastructureFault: async () => ++faults,
       withItemLocked: itemLockOver(async () => copy(row), {
-        recordInfrastructureFault: (id) => workItemRepo.recordInfrastructureFault(id),
+        recordInfrastructureFault: async () => ++faults,
         blockProject: async (_projectId, cause) => {
           halts.push(cause);
           return "blocked";
@@ -511,9 +510,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         attempt: 1,
         errorEnvelope: { outcome: "blocked", summary: "no wider", chain: { boundary: "development", operation: "assignAgent", message: "no wider", timestamp: new Date().toISOString() } },
       };
-      const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds, halts } = buildEnvironmentBlockedDeps(noWider);
-      let faultsCounted = 0;
-      deps.loop.workItemRepo.recordInfrastructureFault = async () => ++faultsCounted;
+      const { deps, stored, statusesWritten, failureRoutes, failedApproaches, refunds, halts, faults } = buildEnvironmentBlockedDeps(noWider);
 
       const result = await processTask(deps, { ...freshPendingItem(), overflowedWindowTokens: 32_000 });
 
@@ -522,7 +519,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       expect(statusesWritten).toEqual(["InProgress", "Abandoned"]);
       expect(stored().blockedReason).toMatchObject({ source: "no_wider_model", overflowedWindowTokens: 32_000 });
       expect(refunds()).toBe(1);
-      expect(faultsCounted).toBe(0);
+      expect(faults()).toBe(0);
       expect(halts).toEqual([]);
       expect(failureRoutes()).toBe(0);
       expect(failedApproaches()).toBe(0);
@@ -560,7 +557,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
         row = { ...row, dispatchCount: row.dispatchCount + 1 };
         return row.dispatchCount;
       },
-      recordInfrastructureFault: async () => 1,
+      withItemLocked: itemLockOver(async () => copy(row), { recordInfrastructureFault: async () => 1, blockProject: notExercised("blockProject") }),
       saveRefundedOverflow: async () => 0,
       recordCrashOrphan: async () => 1,
       async saveRefunded(item, expectedPreviousStatus) {
@@ -780,6 +777,31 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     expect(halts).toHaveLength(1);
     expect(halts[0]).toMatchObject({ category: "infrastructure", errorClass: "InfrastructureFaultBudgetSpent" });
     expect(halts[0]?.reason).toContain("podman binary not found");
+  });
+
+  // The owner may abandon the task between the fault and its charge: the charge reads the task under
+  // its lock, and a task no longer InProgress is charged to neither its budget nor its project.
+  test("a fault past the budget on a task that reads Abandoned under the charge's lock: nothing counted, no halt, no requeue", async () => {
+    const { deps, stored, statusesWritten, refunds, logger } = buildEnvironmentBlockedDeps(probeBlocked, 3);
+    const charged: string[] = [];
+    deps.loop.workItemRepo.withItemLocked = itemLockOver(async () => ({ ...stored(), status: "Abandoned", events: [] }), {
+      recordInfrastructureFault: async (id) => {
+        charged.push(`fault:${id}`);
+        return 4;
+      },
+      blockProject: async (projectId) => {
+        charged.push(`halt:${projectId}`);
+        return "blocked";
+      },
+    });
+
+    const result = await processTask(deps, freshPendingItem());
+
+    expect(result.status).toBe("interrupted");
+    expect(charged).toEqual([]);
+    expect(statusesWritten).toEqual(["InProgress"]);
+    expect(refunds()).toBe(0);
+    expect(logger.records).toContainEqual(expect.objectContaining({ event: "delivery.fault-uncharged", fields: expect.objectContaining({ status: "Abandoned" }) }));
   });
 
   // Ashara's own Z0 fault is not the machines; the substrate probe cannot end its halt.
@@ -1437,7 +1459,7 @@ describe("an environment change requested: an environment task is opened and the
     const built = buildEnvironmentChangeDeps(0, { kind: "role", roleId: ROLE_ID });
     const { item, opened, routed, approaches } = built;
     let faults = 0;
-    built.deps.loop.workItemRepo.recordInfrastructureFault = async () => ++faults;
+    built.deps.loop.workItemRepo.withItemLocked = itemLockOver(built.deps.loop.workItemRepo.findById, { recordInfrastructureFault: async () => ++faults, blockProject: notExercised("blockProject") });
     const deps: CoreLoopDeps = withOverrides(built.deps, { dispatch: { environmentOwner: async () => {
         throw new Error("roster query failed");
       } } });

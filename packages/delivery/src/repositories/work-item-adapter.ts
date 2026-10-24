@@ -123,9 +123,6 @@ export function adaptWorkItemRepo(db: WorkItemRowRepository): WorkItemRepository
     async saveRefunded(item, expectedPreviousStatus) {
       return db.saveRefunded(workItemSaveRow(item), expectedPreviousStatus);
     },
-    async recordInfrastructureFault(id) {
-      return db.recordInfrastructureFault(id);
-    },
     async recordCrashOrphan(id) {
       return db.recordCrashOrphan(id);
     },

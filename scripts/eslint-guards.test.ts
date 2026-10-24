@@ -25,6 +25,9 @@ const INTEGRATION_TEST_FILE = join(REPO, "packages", "integration", "src", "serv
 const EXECUTION_FILE = join(REPO, "packages", "delivery", "src", "execution", "planted.ts");
 const REQUEUE_ON_MAIN_FILE = join(REPO, "packages", "delivery", "src", "requeue-on-main.ts");
 const REQUEUE_UNREAD = "Requeue unread";
+const CHARGE_UNLOCKED = "Charge outside its lock";
+const CHARGE_FILE = join(REPO, "packages", "delivery", "src", "infrastructure-fault.ts");
+const ADAPTER_FILE = join(REPO, "packages", "delivery", "src", "repositories", "work-item-adapter.ts");
 
 /** The guard each finding of `code`, linted as the file at `filePath` with the repo's config, belongs to. */
 async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<string[]> {
@@ -33,6 +36,7 @@ async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<strin
   return results.flatMap((result) => result.messages).map((message) => {
     if (message.ruleId === ASSERTION) return ASSERTION;
     if (message.ruleId === "no-restricted-imports" && message.message.includes(REQUEUE_UNREAD)) return REQUEUE_UNREAD;
+    if (message.ruleId === "no-restricted-properties" && message.message.includes(CHARGE_UNLOCKED)) return CHARGE_UNLOCKED;
     const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED, FIXED_WAIT, HAND_BUILT_DEPS, COMPOSE_SOURCE].find((prefix) => message.message.startsWith(prefix));
     return guard ?? `${message.ruleId ?? "parse"}: ${message.message}`;
   });
@@ -251,6 +255,21 @@ describe("eslint guards fire on planted instances", () => {
     ['import { requeueWorkItem, unblockWorkItem } from "./domain/index.js";\nexport const planted = [requeueWorkItem, unblockWorkItem];', REQUEUE_ON_MAIN_FILE],
     ['import { mergeOnMainOf } from "./orphan-merge.js";\nexport const planted = mergeOnMainOf;', REQUEUE_ON_MAIN_FILE],
   ])("leaves another domain import, and requeue-on-main.ts's own: %s", async (code, filePath) => {
+    expect(await guardsOf(code, filePath)).toEqual([]);
+  });
+
+  test.each([
+    ["export const planted = (repo: { recordInfrastructureFault(id: string): Promise<number> }) => repo.recordInfrastructureFault(\"t\");", EXECUTION_FILE],
+    ["export const planted = (repo: { withItemLocked(): Promise<number> }) => repo.withItemLocked();", DELIVERY_FILE],
+    ["export const planted = (deps: { workItemRepo: { withItemLocked(): Promise<number> } }) => deps.workItemRepo.withItemLocked();", REQUEUE_ON_MAIN_FILE],
+  ])("a charge's lock or count reached outside chargeInfrastructureFault: %s", async (code, filePath) => {
+    expect(await guardsOf(code, filePath)).toEqual([CHARGE_UNLOCKED]);
+  });
+
+  test.each([
+    ["export const planted = (repo: { withItemLocked(): Promise<number> }) => repo.withItemLocked();", CHARGE_FILE],
+    ["export const planted = (repo: { recordInfrastructureFault(id: string): Promise<number> }) => repo.recordInfrastructureFault(\"t\");", ADAPTER_FILE],
+  ])("leaves the charge's own module and the adapter that builds its ledger: %s", async (code, filePath) => {
     expect(await guardsOf(code, filePath)).toEqual([]);
   });
 });

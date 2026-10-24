@@ -8,10 +8,11 @@ import { PlanningService, failWorkItem, takeEvents } from "../domain/index.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
 import type { DispatchSteps, TaskRefusal, TaskResult } from "../types.js";
 import { blockedResult, completedResult, failedResult } from "../types.js";
+import { chargeInfrastructureFault } from "../infrastructure-fault.js";
 import { publishBestEffort } from "./audit-events.js";
 import { configurationRefusal, workBudgetGiveUp } from "./give-up-causes.js";
 import type { InfrastructureFault } from "./halt-causes.js";
-import { INFRASTRUCTURE_FAULT_BUDGET, haltOnFaultBudget, haltOnRefusal } from "./halt-causes.js";
+import { INFRASTRUCTURE_FAULT_BUDGET, haltOnRefusal } from "./halt-causes.js";
 import { MERGE_RECORD_BACKOFF_MS, recordMergeWithRetry } from "./merge-record.js";
 import { mainHoldsNoMergeOf, routeAsParked, routeAsSuccess } from "./main-settle.js";
 import {
@@ -287,12 +288,12 @@ async function routeAsCompleted(deps: ExecutionRoutingDeps, task: WorkItem, exec
  * after the merge commit leaves merged work behind, which is settled there, never counted as a
  * fault nor requeued; a main that cannot be read keeps the task off Pending, its read retried each
  * cycle within this same budget (chargeUnreadMain), never completed nor requeued on it. Otherwise
- * the fault is counted on the task, durably, and the attempt is not
- * charged and no lesson is written. Within the budget the item goes back to Pending (its dispatch
- * refunded when the seam `counted` it). The fault past the budget halts the project under its
- * class, with one report, and requeues the item the same way: a substrate fault on
- * infrastructure, which the substrate probe resumes; Ashara's own, or its model provider's, as a
- * fault, which the operator repairs. A fault after that gives the item up: the halt could not wait it out.
+ * the fault is charged to the task while it is still InProgress (chargeInfrastructureFault): counted
+ * durably, the fault past the budget halting its project under the fault's class in the same
+ * commit; a task the owner moved meanwhile is charged nothing and left where the owner put it. The
+ * attempt is not charged and no lesson is written. Within the budget, and at the fault that halts
+ * the project, the item goes back to Pending (its dispatch refunded when the seam `counted` it). A
+ * fault after that gives the item up: the halt could not wait it out.
  */
 export async function routeAsInfrastructureFault(
   deps: ExecutionRoutingDeps,
@@ -300,10 +301,13 @@ export async function routeAsInfrastructureFault(
   fault: InfrastructureFault,
   dispatch: "counted" | "not-counted",
 ): Promise<void> {
-  const absent = await mainHoldsNoMergeOf(deps, task, `a fault that was not its work (${fault.class}: ${fault.unavailable} unavailable)`);
+  const step = `a fault that was not its work (${fault.class}: ${fault.unavailable} unavailable)`;
+  const absent = await mainHoldsNoMergeOf(deps, task, step);
   if (absent === null) return;
-  const faults = await deps.workItemRepo.recordInfrastructureFault(task.id);
-  if (faults > INFRASTRUCTURE_FAULT_BUDGET + 1) {
+  const charged = await chargeInfrastructureFault(deps, { task, expected: "InProgress", charge: { kind: "dispatch", fault }, step });
+  if (charged.kind === "uncharged") return;
+  const { faults } = charged;
+  if (charged.kind === "spent") {
     await routeAsGivenUp(deps, task.id, {
       source: "environment_unavailable",
       unavailable: fault.unavailable,
@@ -324,7 +328,6 @@ export async function routeAsInfrastructureFault(
       : { task, why, site: "execution.requeueUncounted", write: { kind: "save" } },
     absent,
   );
-  if (faults > INFRASTRUCTURE_FAULT_BUDGET) await haltOnFaultBudget(deps, task, faults, fault);
 }
 
 async function routeAsFailure(deps: ExecutionRoutingDeps, task: WorkItem, verdict: FailureVerdict): Promise<void> {

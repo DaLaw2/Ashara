@@ -21,11 +21,16 @@ export interface ActiveProjects {
 }
 
 /**
- * The writes a charge for a task's unread main makes, each in the transaction that holds the task's
- * row locked: they commit with that lock's read of the task, or not at all.
+ * The writes of a charge for a fault that is not a task's work, each in the transaction that holds
+ * the task's project row and then its row locked: they commit with that lock's read of the task, or
+ * not at all. The ledger exists only inside withItemLocked, and chargeInfrastructureFault is its one
+ * user: no fault is counted on a task, nor its project halted for one, outside that lock.
  */
 export interface LockedChargeLedger {
-  /** Counts one infrastructure fault on the item and returns the count after it; throws when it does not exist. */
+  /**
+   * Counts one infrastructure fault on the item's dispatches and returns the count after it: the
+   * durable bound of its uncharged requeues. Throws when the item does not exist.
+   */
   recordInfrastructureFault(id: WorkItemId): Promise<number>;
   /** Blocks an active project and records why; a project already blocked keeps its first cause. */
   blockProject(projectId: ProjectId, cause: ProjectBlockCause): Promise<"blocked" | "already-blocked">;
@@ -74,12 +79,6 @@ export interface WorkItemRepository {
    * its attempt left charged.
    */
   saveRefunded(item: WorkItem, expectedPreviousStatus: WorkItemStatus): Promise<number>;
-  /**
-   * Counts one infrastructure fault on the item's dispatches in a single UPDATE and
-   * returns the count after it: the durable bound of its uncharged requeues. Throws when the item
-   * does not exist.
-   */
-  recordInfrastructureFault(id: WorkItemId): Promise<number>;
   /**
    * Counts one more startup in a row that found the item InProgress, left by a process that died
    * in a single UPDATE, and returns the count after it: the durable bound of its

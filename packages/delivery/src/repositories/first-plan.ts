@@ -8,6 +8,7 @@ import { currentStoredVision, hasVision } from "../acl/engagement-vision-acl.js"
 import { hasRoster, roleOfLatestRoster } from "../acl/organization-roster-acl.js";
 import { noPlanningOutcome } from "../predicates.js";
 import { WorkItemRowRepository } from "./work-item.js";
+import { lockProjectRow } from "./project-lock.js";
 import { haltForPlanningStopped } from "./project-halt.js";
 import { planWritten, recordPlanFailure, stopPlanning, type DroppedPlanDependency } from "./project-plan.js";
 
@@ -125,12 +126,7 @@ export async function withFirstPlanTransaction<T>(
   fn: (workItemRepo: WorkItemRowRepository, tx: DbHandle) => Promise<T>,
 ): Promise<FirstPlanTransaction<T>> {
   return db.transaction(async (tx) => {
-    const [locked] = await tx
-      .select({ id: projects.id })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .for("update");
-    if (!locked) throw new ProjectNotAwaitingPlan(projectId, "write a first plan (no such project)");
+    if ((await lockProjectRow(tx, projectId)) === null) throw new ProjectNotAwaitingPlan(projectId, "write a first plan (no such project)");
 
     const [stillAwaiting] = await tx
       .select({ id: projects.id })
@@ -151,7 +147,7 @@ export async function withFirstPlanTransaction<T>(
 
 /** Locks the project row for the rest of `tx`, then throws unless it still awaits its first plan. */
 async function lockAwaitingPlan(tx: DbHandle, projectId: ProjectId, operation: string): Promise<void> {
-  await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, projectId)).for("update");
+  await lockProjectRow(tx, projectId);
   const [awaiting] = await tx.select({ id: projects.id }).from(projects).where(and(eq(projects.id, projectId), awaitingPlan()));
   if (!awaiting) throw new ProjectNotAwaitingPlan(projectId, operation);
 }
