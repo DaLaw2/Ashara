@@ -205,39 +205,77 @@ describe("language-homes", () => {
 
 describe("positional-params", () => {
   const POSITIONAL = "positional-params";
+  const SIX = "a: string, b: string, c: string, d: string, e: string, f: string";
   /** The violations of `files` under quality, leaving out the allowed sites this tree does not hold. */
   const sites = (files: Readonly<Record<string, string>>): string[] =>
     positionalParams(homesTree("", { quality: files }))
       .filter((v) => v.specifier === POSITIONAL && v.line > 0)
       .map((v) => `${v.file}:${v.line}`);
+  const nameOf = (source: string): string[] =>
+    positionalParams(homesTree("", { quality: { "result.ts": source } }))
+      .filter((v) => v.specifier === POSITIONAL && v.line > 0)
+      .map((v) => v.reason.split(" takes ")[0] ?? v.reason);
 
   test("an exported function, constructor or arrow past five positional parameters is a violation", () => {
     const source = [
-      "export function built(a: string, b: string, c: string, d: string, e: string, f: string): void {}",
-      "export class Built { constructor(a: string, b: string, c: string, d: string, e: string, f: string) {} }",
-      "export const arrow = (a: string, b: string, c: string, d: string, e: string, f: string): void => {};",
-      "function listed(a: string, b: string, c: string, d: string, e: string, f: string): void {}",
+      `export function built(${SIX}): void {}`,
+      `export class Built { constructor(${SIX}) {} }`,
+      `export const arrow = (${SIX}): void => {};`,
+      `function listed(${SIX}): void {}`,
       "export { listed };",
     ].join("\n");
     expect(sites({ "result.ts": source })).toEqual(["packages/quality/src/result.ts:1", "packages/quality/src/result.ts:2", "packages/quality/src/result.ts:3", "packages/quality/src/result.ts:4"]);
   });
 
-  test("a named-parameter object, five positional parameters, a private helper and a test are clean", () => {
+  test("a public method of an exported class is a violation", () => {
+    expect(nameOf(`export class Ledger {\n  record(${SIX}): void {}\n}`)).toEqual(["Ledger.record"]);
+  });
+
+  test("an interface or port method signature is a violation", () => {
+    expect(nameOf(`export interface Sink {\n  store(${SIX}): Promise<void>;\n}`)).toEqual(["Sink.store"]);
+  });
+
+  test("a function no one exports is a violation", () => {
+    expect(nameOf(`function local(${SIX}): void {}`)).toEqual(["local"]);
+  });
+
+  test("an arrow nested in another function is a violation", () => {
+    expect(nameOf(`export function outer(): void {\n  const inner = (${SIX}): void => {};\n  inner("", "", "", "", "", "");\n}`)).toEqual(["inner"]);
+  });
+
+  test("a function of a scripts/ file is a violation, and a script test is not", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "positional-params-"));
+    scratch = root;
+    fs.mkdirSync(path.join(root, "scripts", "lints"), { recursive: true });
+    fs.writeFileSync(path.join(root, "scripts", "tool.ts"), `export function tool(${SIX}): void {}\n`);
+    fs.writeFileSync(path.join(root, "scripts", "lints", "nested.ts"), `const nested = (${SIX}): void => {};\n`);
+    fs.writeFileSync(path.join(root, "scripts", "tool.test.ts"), `function inTest(${SIX}): void {}\n`);
+    const context = { ...homesTree("", { quality: { "result.ts": "export const clean = 1;\n" } }), root };
+    const found = positionalParams(context).filter((v) => v.specifier === POSITIONAL && v.line > 0).map((v) => `${v.file}:${v.line}`).sort();
+    expect(found).toEqual(["scripts/lints/nested.ts:1", "scripts/tool.ts:1"]);
+  });
+
+  test("a tree with no scripts/ to scan fails closed", () => {
+    const violations = positionalParams(homesTree("", { quality: { "result.ts": "export const clean = 1;\n" } }));
+    expect(violations.map((v) => v.reason)).toContainEqual(expect.stringContaining("no script to scan"));
+  });
+
+  test("a named-parameter object, five positional parameters and a test are clean", () => {
     const source = [
       "export function named({ a, b }: { a: string; b: string }): void {}",
       "export function five(a: string, b: string, c: string, d: string, e: string): void {}",
-      "function local(a: string, b: string, c: string, d: string, e: string, f: string): void {}",
+      "function bound(this: Window, a: string, b: string, c: string, d: string, e: string): void {}",
     ].join("\n");
-    const test = "export function built(a: string, b: string, c: string, d: string, e: string, f: string): void {}";
+    const test = `export function built(${SIX}): void {}`;
     expect(sites({ "result.ts": source, "result.test.ts": test })).toEqual([]);
   });
 
   test("an allowed site that no longer takes a long list is a stale entry", () => {
-    const stale = positionalParams(homesTree("", { quality: { "task-checks.ts": "export function harvestCheckFiles(a: string): void {}" } }));
-    expect(stale.map((v) => v.reason)).toContainEqual(expect.stringContaining("harvestCheckFiles no longer takes"));
+    const stale = positionalParams(homesTree("", { shared: { "json.ts": "export class JsonParseFailed extends Error { constructor(a: string) { super(a); } }" } }));
+    expect(stale.map((v) => v.reason)).toContainEqual(expect.stringContaining("constructor of JsonParseFailed no longer takes"));
   });
 
-  test("the repository's exported functions and constructors keep to five positional parameters", () => {
+  test("the repository's functions, methods and method signatures keep to five positional parameters", () => {
     expect(positionalParams(loadLintContext(REPO))).toEqual([]);
   });
 });

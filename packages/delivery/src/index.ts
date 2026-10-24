@@ -33,7 +33,6 @@ export { createAgentStaffing, gradedCapability } from "./staffing.js";
 export { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
 
 export type { WorkItemRepository } from "./domain/index.js";
-/** @testseam the integration tests start a task as dispatch does against Postgres; processTask is its production caller */
 export { startWorkItem } from "./domain/index.js";
 export {
   startUnlessHeld,
@@ -43,7 +42,6 @@ export {
   abandonWorkItem,
   takeEvents,
 } from "./domain/index.js";
-/** @testseam the integration tests drive and read the board against Postgres through it; the core loop is its production caller */
 export { PlanningService } from "./domain/index.js";
 /** @testseam the integration replan-store.test.ts gives a task up against Postgres; the dispatch path is its production caller */
 export { giveUpWorkItem } from "./domain/index.js";
@@ -70,12 +68,10 @@ export {
 } from "./work-item-language/index.js";
 
 export { FirstPlanner } from "./first-plan.js";
-/** @testseam the integration first-plan tests type their store through it; createFirstPlanStore is its production supplier */
 export type { FirstPlanStore } from "./first-plan.js";
 export { Replanner } from "./replan.js";
 /** @testseam the integration fault-classifiers.test.ts feeds it a last failure that names no party; Replanner.revise is its production caller */
 export { exhaustedRevisionCause } from "./replan.js";
-/** @testseam the integration replan-store.test.ts types its store through it; createReplanStore is its production supplier */
 export type { ReplanStore } from "./replan-port.js";
 export { createFirstPlanStore } from "./stores/first-plan-store.js";
 export { createReplanStore } from "./stores/replan-store.js";

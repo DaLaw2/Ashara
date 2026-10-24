@@ -28,12 +28,12 @@ import type { ProjectId, StepContainment, StepFaulted } from "@ashara/shared";
 // says the acceptance stands.
 
 /** An inbound stop not yet consumed. */
-interface OpenStop {
+export interface OpenStop {
   readonly id: string;
   readonly projectId: ProjectId;
 }
 
-type ClientStopCommit =
+export type ClientStopCommit =
   /** `reportDue` is false only when a stop report already exists (an operator re-activated a stopped project). */
   | { readonly kind: "stopped"; readonly reportDue: boolean }
   | { readonly kind: "already-stopped" };

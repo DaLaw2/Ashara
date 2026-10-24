@@ -155,7 +155,11 @@ export class DeliveredOnMain {
         })),
         own,
       ];
-      runs = await runSuitesOnCheckout(dispatchCells.checkCells(d), RED_RUN_ROLE, environment.imageId, main, dispatchCells.checkoutDir(d, "delivered-on-main"), suites);
+      runs = await runSuitesOnCheckout(
+        dispatchCells.checkCells(d),
+        { role: RED_RUN_ROLE, image: environment.imageId, commit: main, dir: dispatchCells.checkoutDir(d, "delivered-on-main") },
+        suites,
+      );
       // A run that changed main's tracked files decided nothing about main: unrunnable, never a verdict.
       const changed = productChangeOf(task.id, runs);
       if (changed !== null) {
@@ -232,10 +236,7 @@ export class DeliveredOnMain {
       main = await mainCommit(targetProjectPath, task.id);
       onMain = await runChecksOnCheckout(
         dispatchCells.checkCells(d),
-        RED_RUN_ROLE,
-        cellImageOf(d.environment),
-        main,
-        dispatchCells.checkoutDir(d, "delivered-sweep"),
+        { role: RED_RUN_ROLE, image: cellImageOf(d.environment), commit: main, dir: dispatchCells.checkoutDir(d, "delivered-sweep") },
         stored.checks,
         stored.files,
       );

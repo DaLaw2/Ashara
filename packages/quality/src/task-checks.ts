@@ -11,10 +11,12 @@ import {
   targetRepo,
   writeTreeFile,
 } from "@ashara/execution-infra";
+import type { CapabilityLevel } from "@ashara/finance";
 import { joinElided, keepEnds, renderElided } from "@ashara/shared";
 import type { ElidedText, Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import { CHECK_MISSING_EXIT, CHECK_RUNNER, HELD_SET_RULE, heldSetRuleText, unheldReason } from "@ashara/workplace";
 import type { CheckDefinition, CheckRedRunPreview, CheckRun, DefinedCheck, FoundationProbe, HoldEvidence, UnheldEvidence } from "@ashara/workplace";
+import type { VisionSource } from "./acl/engagement-acl.js";
 import { describeProductChange } from "./check-verdict.js";
 import type { CheckRunReport, ProductChangedReport } from "./check-verdict.js";
 
@@ -64,17 +66,17 @@ interface StoredCheck extends CheckDefinition {
 }
 
 /** A check task's foundation: the merged task whose commit its checks are red-run on, or why there is none. */
-type CheckFoundation =
+export type CheckFoundation =
   | { readonly kind: "found"; readonly taskId: string; readonly commit: string }
   | { readonly kind: "none"; readonly reason: string };
 
-/** The latest checks of an implementation task already merged: what a later merge must still pass. */
+/** The latest checks of one implementation task, with the task they decide: of a task already merged, what a later merge must still pass. */
 export interface CompletedTaskChecks extends TaskChecks {
   readonly taskId: string;
 }
 
 /** The latest checks of one task of the project, with its title, as a check author is shown them. */
-interface ProjectTaskChecks extends CompletedTaskChecks {
+export interface ProjectTaskChecks extends CompletedTaskChecks {
   readonly title: string;
 }
 
@@ -85,7 +87,7 @@ export interface StoredCheckFile {
 }
 
 /** The Completed implementation tasks of a project, split by whether any check is stored for them. */
-interface CompletedTasksChecks {
+export interface CompletedTasksChecks {
   /** The latest checks of each task that has them, in the order the tasks completed. */
   readonly checked: readonly CompletedTaskChecks[];
   /**
@@ -93,6 +95,29 @@ interface CompletedTasksChecks {
    * theirs to re-run, so a later merge cannot be checked against them. Named, never dropped.
    */
   readonly unchecked: readonly string[];
+}
+
+/** A check task a suite review reads, as stored; nulls are what its row does not record. */
+export interface CheckTaskUnderReview {
+  readonly id: string;
+  readonly status: string;
+  /** The implementation task its checks decide (task_spec.checksFor). */
+  readonly checksFor: string | null;
+  /** The vision items its task cites (task_spec.visionItems). */
+  readonly visionItems: readonly string[] | null;
+  /** The same items with their ids, status and kind (task_spec.sources); null on rows written before them. */
+  readonly sources: readonly VisionSource[] | null;
+  /** The title of the task its checks decide. */
+  readonly checkedTitle: string | null;
+  /** How many reviews have reopened it so far (its suite_review_findings rows). */
+  readonly reviewReopens: number;
+  /** The grade its task was dispatched at (task_spec.capability); null when the row records none. */
+  readonly grade: CapabilityLevel | null;
+  /**
+   * Every model an attempt on it ran on (dev_sessions.attempt_model), oldest first, each with its catalog
+   * grade; null for a model the catalog does not hold under the attempt's provider.
+   */
+  readonly attemptModels: ReadonlyArray<{ readonly model: string; readonly grade: CapabilityLevel | null }>;
 }
 
 /** Quality's task_checks; the composition root supplies it. */
@@ -399,6 +424,20 @@ type CheckHarvest =
   | { readonly kind: "rejected"; readonly reason: string };
 
 /**
+ * Whose check files a harvest reads: the attempt's worktree `repo`, the commit it started from, the
+ * environment's build context, the paths the author wrote with its file tools, and its checks area.
+ */
+export interface CheckHarvestOf {
+  readonly repo: HostRepo;
+  readonly taskId: string;
+  readonly startCommit: string;
+  readonly buildContext: readonly string[];
+  readonly written: ReadonlySet<string>;
+  readonly area: string;
+  readonly logger: Logger;
+}
+
+/**
  * The files a check attempt wrote: everything in its worktree is committed to the throwaway branch,
  * the branch is diffed against the commit it started from (hardened git), and of the paths it
  * changed only those the author wrote with its file tools (`written`) are its submission; whatever
@@ -408,18 +447,10 @@ type CheckHarvest =
  * a link, a file of the environment's build context (`buildContext`), a file too large or not UTF-8
  * text, all within the area, rejects the whole harvest.
  */
-export async function harvestCheckFiles(
-  repo: HostRepo,
-  taskId: string,
-  startCommit: string,
-  buildContext: readonly string[],
-  written: ReadonlySet<string>,
-  area: string,
-  logger: Logger,
-): Promise<CheckHarvest> {
-  await runHostGit(repo, ["add", "-A"]);
-  await runHostGit(repo, ["commit", "--allow-empty", "-q", "-m", `ashara: checks of task ${taskId}`]);
-  return collectCheckFiles(repo, taskId, startCommit, "HEAD", buildContext, written, area, logger);
+export async function harvestCheckFiles(harvest: CheckHarvestOf): Promise<CheckHarvest> {
+  await runHostGit(harvest.repo, ["add", "-A"]);
+  await runHostGit(harvest.repo, ["commit", "--allow-empty", "-q", "-m", `ashara: checks of task ${harvest.taskId}`]);
+  return collectCheckFiles(harvest, "HEAD");
 }
 
 /**
@@ -427,29 +458,15 @@ export async function harvestCheckFiles(
  * touching its branch: a snapshot of the worktree (reachable from no ref) is diffed instead of a
  * commit. What define_check red-runs one check with, so the author meets the harvest's verdict early.
  */
-export async function previewCheckFiles(
-  repo: HostRepo,
-  taskId: string,
-  startCommit: string,
-  buildContext: readonly string[],
-  written: ReadonlySet<string>,
-  area: string,
-  logger: Logger,
-): Promise<CheckHarvest> {
-  const snapshot = await worktreeSnapshotCommit(repo, taskId, "define_check");
-  return collectCheckFiles(repo, taskId, startCommit, snapshot, buildContext, written, area, logger);
+export async function previewCheckFiles(harvest: CheckHarvestOf): Promise<CheckHarvest> {
+  const snapshot = await worktreeSnapshotCommit(harvest.repo, harvest.taskId, "define_check");
+  return collectCheckFiles(harvest, snapshot);
 }
 
 /** The harvest's rules on the diff from `startCommit` to `endCommit`, each file read from the worktree. */
 async function collectCheckFiles(
-  repo: HostRepo,
-  taskId: string,
-  startCommit: string,
+  { repo, taskId, startCommit, buildContext, written, area, logger }: CheckHarvestOf,
   endCommit: string,
-  buildContext: readonly string[],
-  written: ReadonlySet<string>,
-  area: string,
-  logger: Logger,
 ): Promise<CheckHarvest> {
   const rejected = (reason: string): CheckHarvest => ({ kind: "rejected", reason });
   const { stdout } = await runHostGit(repo, ["diff", "--name-status", "-z", "--no-renames", startCommit, endCommit]);
@@ -530,6 +547,14 @@ export interface SuiteRun {
   readonly report: CheckRunReport;
 }
 
+/** Where checks run: `commit` checked out into `dir`, in one cell of `role` from `image`. */
+export interface CheckCheckout {
+  readonly role: string;
+  readonly image: string;
+  readonly commit: string;
+  readonly dir: string;
+}
+
 /**
  * Checks `commit` out into `dir` (a detached worktree of the target that no cell has mounted) and
  * runs the suites in order, sequentially, in one cell from `image` that mounts it, started when the
@@ -545,10 +570,7 @@ export interface SuiteRun {
  */
 export async function runSuitesOnCheckout(
   cells: CheckCells,
-  role: string,
-  image: string,
-  commit: string,
-  dir: string,
+  { role, image, commit, dir }: CheckCheckout,
   suites: readonly CheckSuite[],
 ): Promise<readonly SuiteRun[]> {
   await mkdir(dirname(dir), { recursive: true });
@@ -655,15 +677,12 @@ async function writeCheckFiles(dir: string, files: readonly CheckFile[]): Promis
 /** One suite of checks on a fresh checkout of `commit`, as runSuitesOnCheckout runs it. */
 export async function runChecksOnCheckout(
   cells: CheckCells,
-  role: string,
-  image: string,
-  commit: string,
-  dir: string,
+  checkout: CheckCheckout,
   checks: readonly CheckDefinition[],
   files: readonly CheckFile[],
 ): Promise<CheckRunReport> {
-  const [only] = await runSuitesOnCheckout(cells, role, image, commit, dir, [{ label: "checks", checks, files }]);
-  if (only === undefined) throw new SuiteRunMissing(dir);
+  const [only] = await runSuitesOnCheckout(cells, checkout, [{ label: "checks", checks, files }]);
+  if (only === undefined) throw new SuiteRunMissing(checkout.dir);
   return only.report;
 }
 

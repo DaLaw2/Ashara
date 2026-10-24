@@ -311,8 +311,7 @@ async function composeInBoot(ports: AsharaPorts, logger: Logger, inBootTrace: <T
   };
 
   const knowledgeSink: KnowledgeSink = {
-    storeFinding: (pid, tid, eid, title, content, tags) =>
-      knowledgeRepo.storeKnowledgeFinding(pid, tid, eid, title, content, tags),
+    storeFinding: (finding) => knowledgeRepo.storeKnowledgeFinding(finding),
   };
 
   // Execution infrastructure: every tool call and every check runs in a cell on

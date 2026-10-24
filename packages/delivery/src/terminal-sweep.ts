@@ -1,6 +1,6 @@
 import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach, describeErrorChain } from "@ashara/shared";
-import type { TerminalSweeper } from "./acl/quality-acl.js";
+import type { DueTerminalSweep, SweptTerminal, TerminalSweeper, TerminalSweepRecord } from "./acl/quality-acl.js";
 import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution/halt-causes.js";
 
 // A project that reaches a terminal short of acceptance, the client's stop or a halt of any kind (a
@@ -18,33 +18,6 @@ import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution/halt-causes.js";
 // the shutdown interrupted is no fault: it escapes to the containment, uncounted, and runs again
 // after the restart.
 
-type Sweep = Awaited<ReturnType<TerminalSweeper["sweepForTerminal"]>>;
-
-/** What a terminal sweep is run for: the client's consumed stop, or a halt episode. */
-type Terminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };
-
-/** A project at a terminal short of acceptance with no terminal sweep recorded for it yet. */
-interface DueTerminalSweep {
-  readonly projectId: ProjectId;
-  /** null when no workspace was ever minted: main holds nothing of the project's to sweep. */
-  readonly workspacePath: string | null;
-  readonly terminal: Terminal;
-}
-
-/** What one terminal sweep recorded, whether or not it ran on a commit. */
-interface TerminalSweepRecord {
-  readonly projectId: ProjectId;
-  readonly terminal: Terminal;
-  /** null when the sweep read no main commit. */
-  readonly mainCommit: string | null;
-  readonly environmentVersion: string | null;
-  readonly checkedTasks: readonly string[];
-  readonly uncheckedTasks: readonly string[];
-  /** Every stored check the sweep could run, with how it ended; none when it ran nothing. */
-  readonly checkOutcomes: Extract<Sweep, { readonly kind: "ran" }>["checkOutcomes"];
-  readonly details: string;
-}
-
 /** The terminal sweep store; the composition root supplies it. */
 export interface TerminalSweepStore {
   /** Every stop and halt episode owed a terminal sweep with none recorded yet, oldest first. */
@@ -54,7 +27,7 @@ export interface TerminalSweepStore {
   /** Records the sweep with no check run and no guarantee evidence, for when its evidence cannot be built; "already-recorded" as above. */
   recordWithoutEvidence(sweep: TerminalSweepRecord): Promise<"recorded" | "already-recorded">;
   /** Counts one sweep of the terminal that could not run, durably; returns the count with it. */
-  recordSweepFault(projectId: ProjectId, terminal: Terminal): Promise<number>;
+  recordSweepFault(projectId: ProjectId, terminal: SweptTerminal): Promise<number>;
 }
 
 interface TerminalSweepDeps {
@@ -65,7 +38,7 @@ interface TerminalSweepDeps {
   readonly logger: Logger;
 }
 
-function terminalId(terminal: Terminal): string {
+function terminalId(terminal: SweptTerminal): string {
   return terminal.kind === "stop" ? `stop ${terminal.stopId}` : `halt ${terminal.blockId}`;
 }
 

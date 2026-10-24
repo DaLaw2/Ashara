@@ -5,13 +5,25 @@
  * its verdict on a failed attempt with the schema it is read back from the database by, the
  * merge record of a task on main and the release of a task found merged there, the release of every
  * settled task's branches, the acceptance and terminal sweeps it runs on a project with why a passed
- * sweep did not accept its project, and the public interface file, which Delivery plans the product
+ * sweep did not accept its project and the records its acceptance and terminal sweep stores list and write, and the public interface file, which Delivery plans the product
  * scaffold to write and every check author to read and Quality's suite review reads, and the marker
  * the scaffold's placeholder refusal carries, which the acceptance sweep refuses on main: both are
  * Quality's convention.
  */
 
-export type { AcceptanceSweeper, AcceptanceUncovered, FailureVerdict, FaultClass, TerminalSweeper } from "@ashara/quality";
+export type {
+  AcceptanceSweeper,
+  AcceptanceSweepRecord,
+  AcceptanceUncovered,
+  DueTerminalSweep,
+  FailedSweepRecord,
+  FailureVerdict,
+  FaultClass,
+  ReadyProject,
+  SweptTerminal,
+  TerminalSweeper,
+  TerminalSweepRecord,
+} from "@ashara/quality";
 export {
   PUBLIC_INTERFACE_FILE,
   SCAFFOLD_PLACEHOLDER_MARKER,

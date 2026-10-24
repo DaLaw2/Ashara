@@ -10,9 +10,13 @@ import { SETTLED_WORK_ITEM_STATUSES } from "./work-item-language/index.js";
 // Delivery's published reads: what another context reads of the board (work_items, its dependency
 // edges, plan revisions and repairs, the planning record) goes through these, never a query of Delivery's tables of its
 // own. Each returns Delivery's rows as stored, its jsonb unread; the reader parses them in Delivery's
-// work-item language. This module imports nothing of Delivery but its predicates and its status
-// vocabulary, which import nothing else, so a context Delivery itself reads can import it without a
-// cycle at load time.
+// work-item language. This module loads nothing of Delivery but its predicates and its status
+// vocabulary, which load nothing else, so a context Delivery itself reads can import it without a
+// cycle at load time; the planning outcomes the Liaison reports on are re-exported as types alone,
+// which load nothing.
+
+export type { DroppedOrderingHints, DuePlanReport } from "./repositories/plan-report.js";
+export type { DuePlanRevision, PlanRevisionToTell } from "./repositories/replan.js";
 
 /** A reference to the project a published scalar or predicate is about: a column, or an expression. */
 type ProjectRef = AnyColumn | SQL;

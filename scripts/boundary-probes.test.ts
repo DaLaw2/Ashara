@@ -101,6 +101,7 @@ const MAP: Readonly<Record<string, PackageMap>> = {
         "src/repositories/client-receipt.ts",
         "src/repositories/delivered-report.ts",
         "src/repositories/early-warning.ts",
+        "src/repositories/plan-report.ts",
         "src/repositories/stack-choice.ts",
         "src/repositories/terminal-report.ts",
         "src/repositories/told-report.ts",

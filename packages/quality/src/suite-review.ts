@@ -18,7 +18,7 @@ import type { VisionSource } from "./acl/engagement-acl.js";
 import { visionSourceCitation } from "./acl/engagement-acl.js";
 import { PUBLIC_INTERFACE_FILE } from "./public-interface.js";
 import type { PublicInterface, PublicInterfaceReader } from "./public-interface.js";
-import type { TaskChecks } from "./task-checks.js";
+import type { CheckTaskUnderReview, TaskChecks } from "./task-checks.js";
 
 // Quality's review of a plan revision's check suites: checks written by
 // independent authors can together ask for what no product can pass. After the last check task of a revision completes and
@@ -80,25 +80,6 @@ import type { TaskChecks } from "./task-checks.js";
 // Each record names the weaker judge it rests on and whether it stood above the work or only equal
 // to it.
 
-/** A check task the review reads, as stored; nulls are what its row does not record. */
-interface CheckTaskUnderReview {
-  readonly id: string;
-  readonly status: string;
-  /** The implementation task its checks decide (task_spec.checksFor). */
-  readonly checksFor: string | null;
-  /** The vision items its task cites (task_spec.visionItems). */
-  readonly visionItems: readonly string[] | null;
-  /** The same items with their ids, status and kind (task_spec.sources); null on rows written before them. */
-  readonly sources: readonly VisionSource[] | null;
-  /** The title of the task its checks decide. */
-  readonly checkedTitle: string | null;
-  /** How many reviews have reopened it so far (its suite_review_findings rows). */
-  readonly reviewReopens: number;
-  /** The grade its task was dispatched at (task_spec.capability); null when the row records none. */
-  readonly grade: CapabilityLevel | null;
-  /** Every model an attempt on it ran on (dev_sessions.attempt_model), each with its catalog grade; null for a model the catalog does not grade. */
-  readonly attemptModels: ReadonlyArray<{ readonly model: string; readonly grade: CapabilityLevel | null }>;
-}
 
 /** What the review reads: the review task's check tasks, the checks stored for their tasks, and whether its check set is frozen. */
 export interface SuiteReviewSource {

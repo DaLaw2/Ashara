@@ -3,7 +3,7 @@ import { containEach } from "@ashara/shared";
 import type { ProjectId, StepContainment, StepFaulted, UnreadSubject } from "@ashara/shared";
 import { projectBlockCause } from "@ashara/delivery/project-halt";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
-import type { PlanTaskCounts } from "@ashara/delivery/reads";
+import type { DroppedOrderingHints, DuePlanReport, DuePlanRevision, PlanTaskCounts } from "@ashara/delivery/reads";
 import { registerOf, registerParagraph } from "./early-warning.js";
 import type { RiskRecordReader } from "./early-warning.js";
 import { REPORT_SUBJECT } from "./report-subjects.js";
@@ -18,52 +18,8 @@ import type { PlanReportSubject } from "./report-subjects.js";
 // be told what changed. The report of a first planning that stopped is the report of that halt, a
 // terminal message (terminal-report.ts): its words are here, and it carries the guarantee table.
 
-/** A revision written before the first plan was reported; `summary` as Delivery recorded it, parsed here. */
-interface RevisionBeforeReport {
-  readonly revisionId: string;
-  readonly revision: number;
-  readonly summary: unknown;
-  /** The client answers recorded as taken in by the revision; its summary must name exactly these many. */
-  readonly answersTaken: number;
-}
-
-/** Ordering hints between tasks that decomposition dropped; unrecorded for a plan written before they were recorded. */
-type DroppedOrderingHints = { readonly kind: "recorded"; readonly count: number } | { readonly kind: "unrecorded" };
-
-/** A recorded planning outcome the client has not been told about. */
-type DuePlanReport =
-  | {
-      readonly subject: typeof REPORT_SUBJECT.firstPlan;
-      readonly projectId: ProjectId;
-      readonly epicTitles: readonly string[];
-      readonly tasks: PlanTaskCounts;
-      readonly droppedOrderingHints: DroppedOrderingHints;
-      /**
-       * Revisions written before this report, oldest first. The epics and counts above are the plan
-       * they left standing, never the work they replaced.
-       */
-      readonly revisions: readonly RevisionBeforeReport[];
-      /** The behaviour the plan that stands adds beyond what the contract states, each recorded as an assumption under its key. */
-      readonly assumptions: readonly PlannedAssumption[];
-    }
-  /** A first plan the store could not read back (a work item that does not parse). */
-  | { readonly subject: "first-plan-unreadable"; readonly projectId: ProjectId; readonly cause: ProjectBlockCause };
-
 /** Behaviour a plan adds that no item of the contract states, as the assumption the contract records it under. */
-interface PlannedAssumption {
-  readonly key: string;
-  readonly statement: string;
-}
-
-/** A revision of the plan the client has not been told about; `summary` as Delivery recorded it, parsed here. */
-interface DuePlanRevisionReport {
-  readonly revisionId: string;
-  readonly projectId: ProjectId;
-  readonly revision: number;
-  readonly summary: unknown;
-  /** The client answers recorded as taken in by the revision; its summary must name exactly these many. */
-  readonly answersTaken: number;
-}
+type PlannedAssumption = Extract<DuePlanReport, { readonly subject: typeof REPORT_SUBJECT.firstPlan }>["assumptions"][number];
 
 /** Engagement's persistence port for planning reports; each report reissues the register of guarantees at risk. */
 export interface PlanReportStore extends RiskRecordReader {
@@ -75,7 +31,7 @@ export interface PlanReportStore extends RiskRecordReader {
    */
   postReport(projectId: ProjectId, subject: PlanReportSubject, body: string, revisionIds: readonly string[]): Promise<"posted" | "already-posted">;
   /** Each due revision report read on its own: one whose row does not read is its UnreadSubject. */
-  dueRevisionReports(): Promise<ReadonlyArray<DuePlanRevisionReport | UnreadSubject>>;
+  dueRevisionReports(): Promise<ReadonlyArray<DuePlanRevision | UnreadSubject>>;
   /** Posts the report on the revision, in reply to the answer that asked for it, unless one exists. */
   postRevisionReport(revisionId: string, body: string): Promise<"posted" | "already-posted">;
   /**
@@ -226,14 +182,14 @@ function plural(count: number, noun: string): string {
  * client asked for, the environment setup and the checks stated apart from them,
  * and any ordering between tasks the plan could not keep.
  */
-function firstPlanReport(
-  epicTitles: readonly string[],
-  goalTasks: number,
-  checkTasks: number,
-  droppedHints: number,
-  changes: readonly RevisionChange[],
-  assumptions: readonly PlannedAssumption[],
-): string {
+function firstPlanReport({ epicTitles, goalTasks, checkTasks, droppedHints, changes, assumptions }: {
+  readonly epicTitles: readonly string[];
+  readonly goalTasks: number;
+  readonly checkTasks: number;
+  readonly droppedHints: number;
+  readonly changes: readonly RevisionChange[];
+  readonly assumptions: readonly PlannedAssumption[];
+}): string {
   const epics = epicTitles.map((title) => `"${title}"`).join(", ");
   const paragraphs = [
     `Ashara has made the first plan for this project from its vision: ${plural(epicTitles.length, "epic")} (${epics}), ` +
@@ -456,6 +412,13 @@ export class PlanReports implements LiaisonPlanReports {
       if (!("changes" in summary)) throw new RepairBeforeFirstPlanReport(due.projectId, revision.revisionId, revision.revision);
       return summary.changes;
     });
-    return firstPlanReport(due.epicTitles, tasks.decomposition, tasks.checks, dropped.count, changes, due.assumptions);
+    return firstPlanReport({
+      epicTitles: due.epicTitles,
+      goalTasks: tasks.decomposition,
+      checkTasks: tasks.checks,
+      droppedHints: dropped.count,
+      changes,
+      assumptions: due.assumptions,
+    });
   }
 }

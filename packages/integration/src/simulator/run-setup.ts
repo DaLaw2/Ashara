@@ -403,11 +403,13 @@ function observePodman(state: RunState, startedCells: FakeCell[], event: PodmanE
  * container runtime.
  */
 export async function provision(
-  options: RunOptions,
-  draws: RunDraws,
-  world: RunWorld,
-  state: RunState,
-  resources: RunResources,
+  { options, draws, world, state, resources }: {
+    readonly options: RunOptions;
+    readonly draws: RunDraws;
+    readonly world: RunWorld;
+    readonly state: RunState;
+    readonly resources: RunResources;
+  },
   onAgentTurn: (task: { readonly id: string; readonly projectId: string }) => Promise<void>,
 ): Promise<Provisioned> {
   stopIfAborted(options, state);

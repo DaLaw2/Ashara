@@ -254,6 +254,15 @@ function reportSinkFailure(event: string, thrown: unknown): boolean {
   }
 }
 
+/** One call to the logger, before it is built into a record: `error` is null when the call passed none. */
+interface LogCall {
+  readonly level: LogLevel;
+  readonly event: LogEvent;
+  readonly msg: string;
+  readonly fields: LogFields | undefined;
+  readonly error: { readonly thrown: unknown } | null;
+}
+
 /**
  * The logger of one composition, writing to `sink`. `ts` reads the injected clock, so a simulated
  * run's records carry simulated time. Records below `minLevel` are dropped.
@@ -264,7 +273,7 @@ export function createLogger(options: { readonly sink: LogSink; readonly clock: 
   const root: Correlation = { traceId: freshId() };
   const scopes = new AsyncLocalStorage<Correlation>();
 
-  const build = (level: LogLevel, event: LogEvent, msg: string, fields: LogFields | undefined, error: unknown, hasError: boolean): LogRecord => {
+  const build = ({ level, event, msg, fields, error }: LogCall): LogRecord => {
     const correlation = scopes.getStore() ?? root;
     return {
       ...correlation,
@@ -274,44 +283,44 @@ export function createLogger(options: { readonly sink: LogSink; readonly clock: 
       event,
       msg: msg.length <= MAX_MSG_CHARS ? msg : cutText(msg, MAX_MSG_CHARS),
       ...(fields !== undefined ? { fields: cleanFields(fields) } : {}),
-      ...(hasError ? { error: loggedError(error) } : {}),
+      ...(error !== null ? { error: loggedError(error.thrown) } : {}),
     };
   };
 
   /** The record, or, when building it threw (a clock that throws, a hostile value), one that says so. */
-  const recordOf = (level: LogLevel, event: LogEvent, msg: string, fields: LogFields | undefined, error: unknown, hasError: boolean): LogRecord => {
+  const recordOf = (call: LogCall): LogRecord => {
     try {
-      return build(level, event, msg, fields, error, hasError);
+      return build(call);
     } catch (thrown) {
       return {
         traceId: root.traceId,
         ts: new Date().toISOString(),
-        level,
+        level: call.level,
         boot,
-        event,
+        event: call.event,
         msg: "the log record could not be built",
         error: loggedError(thrown),
       };
     }
   };
 
-  const emit = (level: LogLevel, event: LogEvent, msg: string, fields: LogFields | undefined, error: unknown, hasError: boolean): void => {
-    if (LEVEL_RANK[level] < LEVEL_RANK[minLevel]) return;
-    const record = recordOf(level, event, msg, fields, error, hasError);
+  const emit = (call: LogCall): void => {
+    if (LEVEL_RANK[call.level] < LEVEL_RANK[minLevel]) return;
+    const record = recordOf(call);
     try {
       sink.write(record);
     } catch (thrown) {
-      reportSinkFailure(event, thrown);
+      reportSinkFailure(call.event, thrown);
       return;
     }
   };
 
   return {
     boot,
-    debug: (event, msg, fields) => emit("debug", event, msg, fields, undefined, false),
-    info: (event, msg, fields) => emit("info", event, msg, fields, undefined, false),
-    warn: (event, msg, fields, ...error) => emit("warn", event, msg, fields, error[0], error.length > 0),
-    error: (event, msg, fields, ...error) => emit("error", event, msg, fields, error[0], error.length > 0),
+    debug: (event, msg, fields) => emit({ level: "debug", event, msg, fields, error: null }),
+    info: (event, msg, fields) => emit({ level: "info", event, msg, fields, error: null }),
+    warn: (event, msg, fields, ...error) => emit({ level: "warn", event, msg, fields, error: error.length > 0 ? { thrown: error[0] } : null }),
+    error: (event, msg, fields, ...error) => emit({ level: "error", event, msg, fields, error: error.length > 0 ? { thrown: error[0] } : null }),
     scope(narrow, work) {
       const enclosing = scopes.getStore() ?? root;
       const { trace, ...rest } = narrow;

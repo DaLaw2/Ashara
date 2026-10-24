@@ -1,5 +1,6 @@
 import type { Database, DbHandle } from "@ashara/db";
-import { parseProjectId, type ProjectId } from "@ashara/shared";
+import { parseProjectId } from "@ashara/shared";
+import type { ClientStopCommit, OpenStop } from "../client-stop.js";
 import type { EndHaltOnStop } from "../ports.js";
 import { stopProject } from "../project-lifecycle.js";
 import { ClientMessageNotConsumable, LockedStanding, consumeInbound, recordStopFound, stopReportPosted, unconsumedStopMessages } from "./client-message.js";
@@ -8,18 +9,8 @@ import { ClientMessageNotConsumable, LockedStanding, consumeInbound, recordStopF
 // together, recording on the stop whether the project was halted, and whether it was accepted, then.
 // The stop's report is a terminal message (repositories/terminal-report.ts), posted once per project.
 
-interface OpenStopRow {
-  readonly id: string;
-  readonly projectId: ProjectId;
-}
-
-type ClientStopCommit =
-  /** `reportDue` is false only when a stop report already exists (an operator re-activated a stopped project). */
-  | { readonly kind: "stopped"; readonly reportDue: boolean }
-  | { readonly kind: "already-stopped" };
-
 /** Inbound stops not yet consumed, read now by inboundDecision (clientMessageReadNow), oldest first. */
-export async function listUnconsumedStops(db: DbHandle): Promise<OpenStopRow[]> {
+export async function listUnconsumedStops(db: DbHandle): Promise<OpenStop[]> {
   const rows = await unconsumedStopMessages(db);
   return rows.map((row) => ({ id: row.id, projectId: parseProjectId(row.projectId, "client_messages.project_id") }));
 }
@@ -42,7 +33,7 @@ class StopNotReadNow extends Error {
  * whether it was accepted then; a halt it finds is ended by Delivery's `endHalt` in the same
  * transaction. A project already stopped gets only the consumption.
  */
-export async function recordClientStop(db: Database, stop: OpenStopRow, endHalt: EndHaltOnStop): Promise<ClientStopCommit> {
+export async function recordClientStop(db: Database, stop: OpenStop, endHalt: EndHaltOnStop): Promise<ClientStopCommit> {
   return db.transaction(async (tx) => {
     const standing = await LockedStanding.readNow(tx, stop.projectId, "stop", null);
     if (!(standing instanceof LockedStanding)) throw new StopNotReadNow(stop.id, standing.detail);

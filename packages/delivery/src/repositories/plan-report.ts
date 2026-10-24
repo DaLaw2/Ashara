@@ -19,17 +19,17 @@ import { answersTakenBy, parseAnswersTaken } from "./replan.js";
 // while the outcome is stamped on the project's planning record and Engagement's told record holds
 // no report on it; the report itself is Engagement's write.
 
-/** A revision of the plan written before the first plan was reported; `summary` as stored. */
+/** A revision of the plan written before the first plan was reported; `summary` as stored, parsed by the report's writer. */
 interface RevisionBeforeReport {
   readonly revisionId: string;
   readonly revision: number;
   readonly summary: unknown;
-  /** The client corrections recorded as taken in by it (correction_holds). */
+  /** The client corrections recorded as taken in by it (correction_holds); the report's summary must name exactly these many. */
   readonly answersTaken: number;
 }
 
 /** How many ordering hints the plan dropped; unrecorded on a project planned before they were recorded. */
-type DroppedOrderingHints = { readonly kind: "recorded"; readonly count: number } | { readonly kind: "unrecorded" };
+export type DroppedOrderingHints = { readonly kind: "recorded"; readonly count: number } | { readonly kind: "unrecorded" };
 
 const DroppedPlanDependenciesSchema: z.ZodType<DroppedPlanDependency[]> = z.array(
   z.object({ dependentTaskTitle: z.string(), unresolvedRef: z.string() }),
@@ -53,16 +53,23 @@ function droppedOrderingHints(projectId: ProjectId, raw: unknown): DroppedOrderi
   return { kind: "recorded", count: parsed.data.length };
 }
 
-type DuePlanReportRow =
+/** A recorded planning outcome the client has not been told about. */
+export type DuePlanReport =
   | {
       readonly subject: typeof REPORT_SUBJECT.firstPlan;
       readonly projectId: ProjectId;
       readonly epicTitles: readonly string[];
       readonly tasks: PlanTaskCounts;
       readonly droppedOrderingHints: DroppedOrderingHints;
-      /** Revisions written before this report, oldest first: the report describes the plan they left. */
+      /**
+       * Revisions written before this report, oldest first. The epics and counts above are the plan
+       * they left standing, never the work they replaced.
+       */
       readonly revisions: readonly RevisionBeforeReport[];
-      /** The behaviour the standing plan's tasks add beyond what the contract states, once each, in the order the tasks cite it. */
+      /**
+       * The behaviour the standing plan's tasks add beyond what the contract states, once each, in the
+       * order the tasks cite it, each recorded as an assumption under its key.
+       */
       readonly assumptions: ReadonlyArray<{ readonly key: string; readonly statement: string }>;
     }
   /**
@@ -89,7 +96,7 @@ type DuePlanReportRow =
  * project; any other planned project whose rows do
  * not read is its UnreadSubject (readEach).
  */
-export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanReportRow | UnreadSubject>> {
+export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanReport | UnreadSubject>> {
   const planned = await db
     .select({ id: projects.id, droppedDependencies: projectPlans.planDroppedDependencies })
     .from(projects)
@@ -104,7 +111,7 @@ export async function listDuePlanReports(db: DbHandle): Promise<Array<DuePlanRep
       ),
     )
     .orderBy(asc(projects.createdAt), asc(projects.id));
-  const firstPlans = await readEach(planned, (row) => ({ id: `first-plan:${row.id}`, projectId: parseProjectId(row.id, "projects.id") }), async (row): Promise<DuePlanReportRow> => {
+  const firstPlans = await readEach(planned, (row) => ({ id: `first-plan:${row.id}`, projectId: parseProjectId(row.id, "projects.id") }), async (row): Promise<DuePlanReport> => {
     const items = await db
       .select({
         id: workItems.id,

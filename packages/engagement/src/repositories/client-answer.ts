@@ -4,8 +4,8 @@ import type { Database, DbHandle } from "@ashara/db";
 import { firstPlanned } from "@ashara/delivery/predicates";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { MAX_ANSWER_ATTEMPTS } from "../answers.js";
+import type { AnswerRecording, AnswerWrite, OpenAnswer } from "../answers.js";
 import type { RevisionRecord } from "../vision-language/contract-op.js";
-import type { StoredVision, VisionAppend } from "../vision.js";
 import type { HoldCorrection } from "../ports.js";
 import { affectedKeysOf } from "./client-change.js";
 import { LockedStanding, consumeInbound, insertOutboundReport, openAnswerMessages, recordReadingFailure } from "./client-message.js";
@@ -13,23 +13,6 @@ import { VisionRepository } from "./vision.js";
 
 // The client's answers to the Liaison's questions: each inbound
 // 'answer' is consumed once, together with what it changes.
-
-interface OpenAnswerRow {
-  readonly id: string;
-  readonly projectId: ProjectId;
-  readonly body: string;
-  readonly questionId: string;
-  readonly intakeAttempts: number;
-  readonly intakeLastError: string | null;
-  /** Whose failure the last counted reading attempt was, as stored. */
-  readonly intakeLastFailure: string | null;
-  /** Whether the project's first plan was written when this answer was read. */
-  readonly planned: boolean;
-  /** The project's current vision, or null when it has none. */
-  readonly vision: StoredVision | null;
-  /** Whether Delivery had the project halted when this answer was read. */
-  readonly paused: boolean;
-}
 
 /**
  * Unconsumed inbound answers of active projects, those at work first, each oldest first, with its
@@ -39,7 +22,7 @@ interface OpenAnswerRow {
  * waits out any halt, each as inboundDecision decides (clientMessageReadNow). A project with a stop awaiting the Liaison is not listed, as for tenders.
  * Each answer is read on its own (readEach): one whose rows do not read is its UnreadSubject.
  */
-export async function listOpenAnswers(db: DbHandle): Promise<Array<OpenAnswerRow | UnreadSubject>> {
+export async function listOpenAnswers(db: DbHandle): Promise<Array<OpenAnswer | UnreadSubject>> {
   const visions = new VisionRepository(db);
   return readEach(
     await openAnswerMessages(db, MAX_ANSWER_ATTEMPTS, null),
@@ -53,7 +36,7 @@ export async function listOpenAnswers(db: DbHandle): Promise<Array<OpenAnswerRow
  * Liaison reads it against, so an answer read after another answer of its project wrote a vision
  * version sees that version. null when it is no longer listed (consumed, or its project stopped).
  */
-export async function readOpenAnswer(db: DbHandle, answerId: string): Promise<OpenAnswerRow | null> {
+export async function readOpenAnswer(db: DbHandle, answerId: string): Promise<OpenAnswer | null> {
   const [row] = await openAnswerMessages(db, MAX_ANSWER_ATTEMPTS, answerId);
   return row === undefined ? null : openAnswerRow(new VisionRepository(db), row);
 }
@@ -61,7 +44,7 @@ export async function readOpenAnswer(db: DbHandle, answerId: string): Promise<Op
 type OpenAnswerMessage = Awaited<ReturnType<typeof openAnswerMessages>>[number];
 
 /** One open answer's message, read with its project's current vision. */
-async function openAnswerRow(visions: VisionRepository, row: OpenAnswerMessage): Promise<OpenAnswerRow> {
+async function openAnswerRow(visions: VisionRepository, row: OpenAnswerMessage): Promise<OpenAnswer> {
   const projectId = parseProjectId(row.projectId, "client_messages.project_id");
   return {
     id: row.id,
@@ -107,27 +90,6 @@ class AnswerContextMoved extends Error {
   }
 }
 
-interface AnswerWrite {
-  readonly answerId: string;
-  readonly projectId: ProjectId;
-  /** Whether the project's first plan existed when the answer was composed. */
-  readonly planned: boolean;
-  /** The vision version to append after `basedOnVersion` (every other field is copied from it), with its revision record. */
-  readonly vision: { readonly append: VisionAppend; readonly revision: RevisionRecord } | null;
-  /**
-   * A planned project's correction: Delivery's hold on the work citing the assumption it changed,
-   * and the report posted in reply to the answer.
-   */
-  readonly replanReport: string | null;
-  /**
-   * What the client is told of an answer that records nothing, posted to the project: not in reply to
-   * the answer, whose replies each name the vision version recording it.
-   */
-  readonly notice: string | null;
-  /** Whether the project was halted when the answer was composed. */
-  readonly paused: boolean;
-}
-
 /** A write asks to hold the work an answer changed, but appends no vision version for the hold to name. */
 class AnswerCorrectionUnversioned extends Error {
   constructor(
@@ -158,12 +120,6 @@ export async function recordClientAnswer(db: Database, write: AnswerWrite, hold:
     throw err;
   }
 }
-
-/** What recording an answer did; "moved" wrote nothing, and `detail` says what moved. */
-type AnswerRecording =
-  | { readonly kind: "recorded" }
-  | { readonly kind: "already-consumed" }
-  | { readonly kind: "moved"; readonly detail: string };
 
 function writeClientAnswer(db: Database, write: AnswerWrite, hold: HoldCorrection): Promise<"recorded" | "already-consumed"> {
   return db.transaction(async (tx) => {

@@ -6,21 +6,12 @@ import { latestEnvironmentStatement } from "@ashara/delivery/reads";
 import { noOpenStop, projectAtWork } from "../predicates.js";
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import { stackChoiceSubject } from "../stack-choice.js";
-import type { RevisionRecord } from "../vision-language/contract-op.js";
-import type { StoredVision, VisionAppend } from "../vision.js";
+import type { DueStackChoice, StackChoiceWrite } from "../stack-choice.js";
 import { postOnSubject } from "./client-message.js";
 import { VisionRepository } from "./vision.js";
 
 // The stack Sprint 0 chose, told to the client once: a completed environment task
 // with a statement is due while its project has no 'stack-choice' report.
-
-interface DueStackChoiceRow {
-  readonly projectId: ProjectId;
-  readonly taskId: string;
-  readonly statement: string;
-  /** The project's current vision, or null when it has none. */
-  readonly vision: StoredVision | null;
-}
 
 /**
  * Every active project whose latest completed environment task carries a statement and that has
@@ -29,7 +20,7 @@ interface DueStackChoiceRow {
  * the subject, since a project is told its stack choice once: one whose rows do not read is its
  * UnreadSubject.
  */
-export async function listDueStackChoices(db: DbHandle): Promise<Array<DueStackChoiceRow | UnreadSubject>> {
+export async function listDueStackChoices(db: DbHandle): Promise<Array<DueStackChoice | UnreadSubject>> {
   const candidates = await db
     .select({ id: projects.id })
     .from(projects)
@@ -46,7 +37,7 @@ export async function listDueStackChoices(db: DbHandle): Promise<Array<DueStackC
   const read = await readEach(
     candidates,
     (candidate) => stackChoiceSubject(parseProjectId(candidate.id, "projects.id")),
-    async (candidate): Promise<DueStackChoiceRow | null> => {
+    async (candidate): Promise<DueStackChoice | null> => {
       // The report tells the client the environment is set up: only a task whose merge is on record did that.
       const task = await latestEnvironmentStatement(db, candidate.id);
       if (task === null) return null;
@@ -54,7 +45,7 @@ export async function listDueStackChoices(db: DbHandle): Promise<Array<DueStackC
       return { projectId, taskId: task.taskId, statement: task.statement, vision: await visions.getCurrent(projectId) };
     },
   );
-  return read.filter((row): row is DueStackChoiceRow | UnreadSubject => row !== null);
+  return read.filter((row): row is DueStackChoice | UnreadSubject => row !== null);
 }
 
 /** The project's vision moved past the version the stack choice was composed against. */
@@ -70,15 +61,6 @@ class StackChoiceVisionMoved extends Error {
     );
     this.name = "StackChoiceVisionMoved";
   }
-}
-
-interface StackChoiceWrite {
-  readonly projectId: ProjectId;
-  /** The vision version appended after the one the choice was composed against. */
-  readonly vision: VisionAppend;
-  /** The revision record written with it. */
-  readonly revision: RevisionRecord;
-  readonly report: string;
 }
 
 /**

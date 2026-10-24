@@ -5,14 +5,14 @@ import type { Database } from "@ashara/db";
 export class FailedApproachRepository {
   constructor(private readonly db: Database) {}
 
-  async record(
-    projectId: string,
-    taskId: string | null,
-    epicId: string | null,
-    title: string,
-    reason: string,
-    learned: string,
-  ) {
+  async record({ projectId, taskId, epicId, title, reason, learned }: {
+    readonly projectId: string;
+    readonly taskId: string | null;
+    readonly epicId: string | null;
+    readonly title: string;
+    readonly reason: string;
+    readonly learned: string;
+  }) {
     await this.db.insert(failedApproaches).values({
       projectId,
       taskId,

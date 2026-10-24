@@ -133,15 +133,15 @@ export class CheckHarvest {
           { undecided },
         );
       }
-      const harvest = await harvestCheckFiles(
-        d.repo,
-        task.id,
-        work.startCommit,
-        buildContextPaths(work.environment.definition),
-        work.recorder.writtenFiles(),
-        checkAreaOf(work.checkedTaskId),
-        this.deps.logger,
-      );
+      const harvest = await harvestCheckFiles({
+        repo: d.repo,
+        taskId: task.id,
+        startCommit: work.startCommit,
+        buildContext: buildContextPaths(work.environment.definition),
+        written: work.recorder.writtenFiles(),
+        area: checkAreaOf(work.checkedTaskId),
+        logger: this.deps.logger,
+      });
       if (harvest.kind === "rejected") return this.checksRejected(d, outcome, harvest.reason, {});
       if (harvest.discarded.length > 0) {
         eventSink?.emit({ event: "check_files_discarded", taskId: task.id, attempt: task.attempt, area: checkAreaOf(work.checkedTaskId), paths: harvest.discarded });
@@ -151,10 +151,7 @@ export class CheckHarvest {
       try {
         redRun = await runChecksOnCheckout(
           dispatchCells.checkCells(d),
-          RED_RUN_ROLE,
-          work.environment.imageId,
-          foundation.commit,
-          dispatchCells.checkoutDir(d, "red-run"),
+          { role: RED_RUN_ROLE, image: work.environment.imageId, commit: foundation.commit, dir: dispatchCells.checkoutDir(d, "red-run") },
           defined,
           harvest.files,
         );

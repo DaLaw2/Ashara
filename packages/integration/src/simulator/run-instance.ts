@@ -614,10 +614,12 @@ function paddingOf(bytes: number): string {
 export async function tender(
   server: SimulatedProcess,
   simulated: SimulatedClient,
-  index: number,
-  seed: number,
-  behaviours: readonly string[],
-  paddingBytes: number,
+  { index, seed, behaviours, paddingBytes }: {
+    readonly index: number;
+    readonly seed: number;
+    readonly behaviours: readonly string[];
+    readonly paddingBytes: number;
+  },
 ): Promise<string> {
   const projectName = `sim-${seed}${index === 0 ? "" : `-p${index + 1}`}`;
   const body = `Build a product with ${behaviours.join(", ")}.${paddingOf(paddingBytes)}`;

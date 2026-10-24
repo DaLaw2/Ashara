@@ -8,8 +8,8 @@
  * optional dependencies, stack literals, table ownership, the project record's columns, the
  * simulator's run budgets, raw copies of a
  * cross-context predicate, the verification split, a copy of a wording the simulator's stand-ins
- * recognise, the line limits of the modules split by role, a name declared outside its one home, and an
- * exported function or constructor with a long positional parameter list.
+ * recognise, the line limits of the modules split by role, a name declared outside its one home, and a
+ * function, method or method signature of production source or scripts/ with a long positional parameter list.
  *
  * Exits 0 if clean, 1 on violations, on a malformed rules file, or when the
  * rules sections and the directories under packages/ do not match one-to-one.

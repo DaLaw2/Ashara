@@ -38,14 +38,13 @@ export class FoundationGate {
     const { task, sessionId, targetProjectPath } = d;
     let build: EnvironmentTestRun;
     try {
-      build = await runFoundationBuild(
-        this.deps.dispatchCells.environmentScope(d),
-        RED_RUN_ROLE,
-        work.environment.imageId,
-        work.foundation.commit,
-        work.environment.definition,
-        this.deps.attemptPolicy.perCommandTimeoutSeconds,
-      );
+      build = await runFoundationBuild(this.deps.dispatchCells.environmentScope(d), {
+        role: RED_RUN_ROLE,
+        imageRef: work.environment.imageId,
+        commit: work.foundation.commit,
+        definition: work.environment.definition,
+        timeoutSeconds: this.deps.attemptPolicy.perCommandTimeoutSeconds,
+      });
     } catch (e) {
       await discardCheckWorkdir(d.workDir, targetProjectPath, work.branch, this.deps.logger);
       return mainRunBlocked({ task, sessionId, error: e, agent: NO_AGENT, eventSink, logger: this.deps.logger, stage: "checkRedRun", step: "build on the foundation" });

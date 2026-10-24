@@ -96,7 +96,7 @@ export interface CorrectionWrite {
 }
 
 /** What recording a change did; "moved" wrote nothing: the vision it was read against is no longer current. */
-type CorrectionRecording = { readonly kind: "recorded" } | { readonly kind: "already-consumed" } | { readonly kind: "moved"; readonly detail: string };
+export type CorrectionRecording = { readonly kind: "recorded" } | { readonly kind: "already-consumed" } | { readonly kind: "moved"; readonly detail: string };
 
 /** Engagement's persistence port for client changes. Each write method is one transaction. */
 export interface ClientChangeStore {

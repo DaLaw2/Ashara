@@ -328,7 +328,7 @@ async function runIsolated(options: RunOptions, log: string[]): Promise<RunResul
   const abortInstance = (): void => state.live?.ashara.abort();
   signal?.addEventListener("abort", abortInstance, { once: true });
   try {
-    await runBody(options, started, draws, world, state, resources, processWide);
+    await runBody({ options, started, draws, world, state, resources, processWide });
   } catch (err) {
     log.push(`harness error: ${describeErrorChain(err)}`);
     throw err;
@@ -368,17 +368,17 @@ async function runIsolated(options: RunOptions, log: string[]): Promise<RunResul
 }
 
 /** The run's body: provisioned, composed, each project tendered, its cycles run and its end judged. */
-async function runBody(
-  options: RunOptions,
-  started: number,
-  draws: RunDraws,
-  world: RunWorld,
-  state: RunState,
-  resources: RunResources,
-  processWide: ProcessWide,
-): Promise<void> {
+async function runBody({ options, started, draws, world, state, resources, processWide }: {
+  readonly options: RunOptions;
+  readonly started: number;
+  readonly draws: RunDraws;
+  readonly world: RunWorld;
+  readonly state: RunState;
+  readonly resources: RunResources;
+  readonly processWide: ProcessWide;
+}): Promise<void> {
   const correction = new ClientCorrection(draws.correctionDraw, state);
-  const provisioned = await provision(options, draws, world, state, resources, (task) =>
+  const provisioned = await provision({ options, draws, world, state, resources }, (task) =>
     correction.duringAgentTurn(task),
   );
   const { observer, projectIds, client, others, standIns } = provisioned;
@@ -405,10 +405,11 @@ async function runBody(
   // first project's, and its outcome is the run's.
   // eslint-disable-next-line no-restricted-syntax -- policy default: a run's tender carries no filler unless asked
   const padding = options.requestPaddingBytes ?? 0;
-  const projectId = await tender(server, client, 0, options.seed, draws.universe.behaviours, padding);
+  const tendered = { seed: options.seed, behaviours: draws.universe.behaviours, paddingBytes: padding };
+  const projectId = await tender(server, client, { ...tendered, index: 0 });
   projectIds.push(projectId);
   for (const [index, other] of others.entries()) {
-    projectIds.push(await tender(server, other, index + 1, options.seed, draws.universe.behaviours, padding));
+    projectIds.push(await tender(server, other, { ...tendered, index: index + 1 }));
   }
   correction.arm({ projectId, client, standIns, observer });
   const loop = new CycleLoop({ options, started, draws, world, state, server, provisioned, correction });

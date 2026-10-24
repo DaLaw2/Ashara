@@ -208,7 +208,7 @@ export async function containEach<T, O>(
     if (prior !== undefined && !prior.due) continue;
     outcomes.push(
       await containment.logger.scope({ projectId: subject.projectId, subject: subject.id }, () =>
-        containSubject(containment, step, item, subject, prior, run),
+        containSubject({ containment, step, item, subject, prior, run }),
       ),
     );
   }
@@ -216,14 +216,14 @@ export async function containEach<T, O>(
 }
 
 /** One subject's run, contained to it: its outcome, or its recorded fault. Only an escaping error, or a ledger's failure, throws. */
-async function containSubject<T, O>(
-  containment: StepContainment,
-  step: CycleStep,
-  item: T | UnreadSubject,
-  subject: StepSubject,
-  prior: StepFaultStanding | undefined,
-  run: (item: T) => Promise<O>,
-): Promise<O | StepFaulted> {
+async function containSubject<T, O>({ containment, step, item, subject, prior, run }: {
+  readonly containment: StepContainment;
+  readonly step: CycleStep;
+  readonly item: T | UnreadSubject;
+  readonly subject: StepSubject;
+  readonly prior: StepFaultStanding | undefined;
+  readonly run: (item: T) => Promise<O>;
+}): Promise<O | StepFaulted> {
   const result = await runSubject(item, run);
   if (result.ran) {
     // A run that completes clears the faults "in a row", so a subject whose runs

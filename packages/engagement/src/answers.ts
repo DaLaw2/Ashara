@@ -39,7 +39,7 @@ export const MAX_ANSWER_ATTEMPTS = 3;
 const MAX_ANSWER_WRITES = 2;
 
 /** An inbound answer not yet consumed, as the answer store reads it. */
-interface OpenAnswer {
+export interface OpenAnswer {
   readonly id: string;
   readonly projectId: ProjectId;
   readonly body: string;
@@ -57,20 +57,30 @@ interface OpenAnswer {
   readonly paused: boolean;
 }
 
-interface AnswerWrite {
+export interface AnswerWrite {
   readonly answerId: string;
   readonly projectId: ProjectId;
+  /** Whether the project's first plan existed when the answer was composed. */
   readonly planned: boolean;
+  /** The vision version to append after `basedOnVersion` (every other field is copied from it), with its revision record. */
   readonly vision: { readonly append: VisionAppend; readonly revision: RevisionRecord } | null;
+  /**
+   * A planned project's correction: Delivery's hold on the work citing the assumption it changed,
+   * and the report posted in reply to the answer.
+   */
   readonly replanReport: string | null;
-  /** What the client is told of an answer that records nothing: one replying to a question already closed. */
+  /**
+   * What the client is told of an answer that records nothing (one replying to a question already
+   * closed), posted to the project: not in reply to the answer, whose replies each name the vision
+   * version recording it.
+   */
   readonly notice: string | null;
   /** Whether the project was halted when the answer was composed: its report says so, so a write finding otherwise writes nothing. */
   readonly paused: boolean;
 }
 
-/** What recording an answer did; "moved" wrote nothing: what it was composed against changed meanwhile. */
-type AnswerRecording =
+/** What recording an answer did; "moved" wrote nothing: what it was composed against changed meanwhile, as `detail` says. */
+export type AnswerRecording =
   | { readonly kind: "recorded" }
   | { readonly kind: "already-consumed" }
   | { readonly kind: "moved"; readonly detail: string };

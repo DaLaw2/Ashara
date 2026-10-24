@@ -208,10 +208,7 @@ export class PostMergeChecks {
       lease.extend(cellRunBoundMs(Array.from({ length: checks }, () => perCheck)), `the post-merge cell of ${checks} check(s)`);
       runs = await runSuitesOnCheckout(
         this.deps.dispatchCells.checkCells(d),
-        POST_MERGE_VERIFIER_ROLE,
-        merged.image,
-        commit,
-        this.deps.dispatchCells.checkoutDir(d, "post-merge-checks"),
+        { role: POST_MERGE_VERIFIER_ROLE, image: merged.image, commit, dir: this.deps.dispatchCells.checkoutDir(d, "post-merge-checks") },
         suites,
       );
       // A run that changed the merge's tracked files is no verdict on the merge: unrunnable,

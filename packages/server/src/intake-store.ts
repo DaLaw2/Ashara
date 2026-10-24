@@ -24,20 +24,7 @@ export function createIntakeStore(db: ReturnType<typeof createDb>): IntakeStore 
       const vision = await visions.getCurrent(projectId);
       return vision ? vision.version : null;
     },
-    async recordIntake(write) {
-      const commit = await recordTenderIntake(db, {
-        tenderId: write.tender.id,
-        projectId: write.tender.projectId,
-        questions: write.questions,
-        contractDraft: write.contractDraft,
-        readingReport: write.readingReport,
-        reading: write.reading,
-        vision: write.vision,
-      });
-      return commit.kind === "recorded"
-        ? { kind: "recorded", questionIds: commit.questionIds }
-        : commit;
-    },
+    recordIntake: (write) => recordTenderIntake(db, write),
     consumeTender: (tender) => consumeTenderWithoutIntake(db, tender),
     recordFailedAttempt: (tenderId, error) => messages.recordIntakeFailure(tenderId, error),
     blockProject: (projectId, cause) => projects.block(projectId, cause),

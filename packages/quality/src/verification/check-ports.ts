@@ -54,10 +54,7 @@ export class CheckPorts {
           const commit = await worktreeSnapshotCommit(d.repo, d.task.id, "run_checks");
           report = await runChecksOnCheckout(
             { ...dispatchCells.checkCells(d), timeoutSeconds },
-            RED_RUN_ROLE,
-            cellImageOf(d.environment),
-            commit,
-            dispatchCells.checkoutDir(d, `run-checks-${runs}`),
+            { role: RED_RUN_ROLE, image: cellImageOf(d.environment), commit: commit, dir: dispatchCells.checkoutDir(d, `run-checks-${runs}`) },
             stored.checks,
             stored.files,
           );
@@ -105,22 +102,19 @@ export class CheckPorts {
       runs += 1;
       const dir = dispatchCells.checkoutDir(d, `${purpose}-${runs}`);
       try {
-        const harvest = await previewCheckFiles(
-          d.repo,
-          d.task.id,
-          work.startCommit,
-          buildContextPaths(work.environment.definition),
-          work.recorder.writtenFiles(),
-          checkAreaOf(work.checkedTaskId),
-          this.deps.logger,
-        );
+        const harvest = await previewCheckFiles({
+          repo: d.repo,
+          taskId: d.task.id,
+          startCommit: work.startCommit,
+          buildContext: buildContextPaths(work.environment.definition),
+          written: work.recorder.writtenFiles(),
+          area: checkAreaOf(work.checkedTaskId),
+          logger: this.deps.logger,
+        });
         if (harvest.kind === "rejected") return { report: { kind: "files_refused", detail: harvest.reason }, dir, discarded: [] };
         const report = await runChecksOnCheckout(
           { ...dispatchCells.checkCells(d), timeoutSeconds },
-          RED_RUN_ROLE,
-          work.environment.imageId,
-          work.foundation.commit,
-          dir,
+          { role: RED_RUN_ROLE, image: work.environment.imageId, commit: work.foundation.commit, dir: dir },
           [check],
           harvest.files,
         );

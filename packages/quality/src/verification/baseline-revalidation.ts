@@ -57,14 +57,13 @@ export class BaselineRevalidation {
       let build: EnvironmentTestRun | null = null;
       if (d.environment.kind === "environment") {
         try {
-          build = await runFoundationBuild(
-            dispatchCells.environmentScope(d),
-            RED_RUN_ROLE,
-            d.environment.imageId,
-            stored.baselineCommit,
-            d.environment.definition,
-            this.deps.attemptPolicy.perCommandTimeoutSeconds,
-          );
+          build = await runFoundationBuild(dispatchCells.environmentScope(d), {
+            role: RED_RUN_ROLE,
+            imageRef: d.environment.imageId,
+            commit: stored.baselineCommit,
+            definition: d.environment.definition,
+            timeoutSeconds: this.deps.attemptPolicy.perCommandTimeoutSeconds,
+          });
         } catch (e) {
           await cleanupWorkdir(workDir, targetProjectPath);
           return mainRunBlocked({ task, sessionId, error: e, agent: NO_AGENT, eventSink, logger: this.deps.logger, stage: "checkRedRun", step: "build on the baseline" });
@@ -77,10 +76,7 @@ export class BaselineRevalidation {
         try {
           redRun = await runChecksOnCheckout(
             dispatchCells.checkCells(d),
-            RED_RUN_ROLE,
-            cellImageOf(d.environment),
-            stored.baselineCommit,
-            dispatchCells.checkoutDir(d, "red-run"),
+            { role: RED_RUN_ROLE, image: cellImageOf(d.environment), commit: stored.baselineCommit, dir: dispatchCells.checkoutDir(d, "red-run") },
             stored.checks,
             stored.files,
           );

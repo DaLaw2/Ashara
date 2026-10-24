@@ -101,11 +101,25 @@ export class WorkLedger {
     const verdict = projectDrawVerdict(CALL_SITE_PURPOSE[callSite], drawn.project.spent + drawn.project.inFlight, project);
     if (verdict !== "admitted") {
       const reserve = { requests: project.reserveRequests, protected: verdict === "reserve_protected" };
-      const work = await this.atBudget("project", project.budgetRequests, drawn.project.granted, reserve, drawn.project, { projectId, taskId: null });
+      const work = await this.atBudget({
+        scope: "project",
+        budgetRequests: project.budgetRequests,
+        grantedRequests: drawn.project.granted,
+        reserve,
+        drawn: drawn.project,
+        of: { projectId, taskId: null },
+      });
       throw new WorkBudgetSpent({ scope: { kind: "project", projectId }, callSite, work });
     }
     if (taskId !== null && drawn.task !== null && drawn.task.spent + drawn.task.inFlight >= budgets.perTaskRequests) {
-      const work = await this.atBudget("task", budgets.perTaskRequests, 0, { requests: 0, protected: false }, drawn.task, { projectId, taskId });
+      const work = await this.atBudget({
+        scope: "task",
+        budgetRequests: budgets.perTaskRequests,
+        grantedRequests: 0,
+        reserve: { requests: 0, protected: false },
+        drawn: drawn.task,
+        of: { projectId, taskId },
+      });
       throw new WorkBudgetSpent({ scope: { kind: "task", projectId, taskId }, callSite, work });
     }
 
@@ -121,14 +135,14 @@ export class WorkLedger {
     });
   }
 
-  private async atBudget(
-    scope: WorkAtBudget["scope"],
-    budgetRequests: number,
-    grantedRequests: number,
-    reserve: { readonly requests: number; readonly protected: boolean },
-    drawn: { readonly spent: number; readonly inFlight: number },
-    of: Parameters<LlmCallRepository["workBySite"]>[0],
-  ): Promise<WorkAtBudget> {
+  private async atBudget({ scope, budgetRequests, grantedRequests, reserve, drawn, of }: {
+    readonly scope: WorkAtBudget["scope"];
+    readonly budgetRequests: number;
+    readonly grantedRequests: number;
+    readonly reserve: { readonly requests: number; readonly protected: boolean };
+    readonly drawn: { readonly spent: number; readonly inFlight: number };
+    readonly of: Parameters<LlmCallRepository["workBySite"]>[0];
+  }): Promise<WorkAtBudget> {
     const bySite = await this.deps.ledger.workBySite(of);
     return {
       scope,

@@ -255,7 +255,7 @@ async function runSweep(deps: MainSweepDeps, sweep: SweepOfMain, at: (step: stri
     signal: cells.shutdownSignal,
   };
   const dir = join(checkoutsRoot(deps.config.workdirBase), `acceptance-${projectId}-${createSessionId()}`);
-  const runs: readonly SuiteRun[] = await runSuitesOnCheckout(checkCells, RED_RUN_ROLE, environment.imageId, main, dir, suites);
+  const runs: readonly SuiteRun[] = await runSuitesOnCheckout(checkCells, { role: RED_RUN_ROLE, image: environment.imageId, commit: main, dir }, suites);
   const ran = suitesVerdict(suites, runs, completed.checked.length, "main");
   const gaps = [
     ...(neverChecked.length === 0 ? [] : [`Goal task(s) with no stored checks, so never checked: ${neverChecked.join(", ")}`]),

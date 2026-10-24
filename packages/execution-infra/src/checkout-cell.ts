@@ -75,6 +75,14 @@ export async function runEnvironmentCommand(cell: Cell, command: string, timeout
   };
 }
 
+/** Which checkout a cell mounts: `commit` of the target, for `purpose`, in a cell of `role` from `imageRef`. */
+interface CheckoutCellOf {
+  readonly purpose: EnvironmentCheckoutPurpose;
+  readonly role: string;
+  readonly imageRef: string;
+  readonly commit: string;
+}
+
 /**
  * Checks `commit` out into a fresh detached worktree of the target, runs `use` with one cell from
  * `imageRef` mounting it and the checkout's repo, and removes the checkout and the cell afterwards;
@@ -82,10 +90,7 @@ export async function runEnvironmentCommand(cell: Cell, command: string, timeout
  */
 export async function withCheckoutCell<T>(
   scope: EnvironmentCheckScope,
-  purpose: EnvironmentCheckoutPurpose,
-  role: string,
-  imageRef: string,
-  commit: string,
+  { purpose, role, imageRef, commit }: CheckoutCellOf,
   use: (cell: Cell, repo: HostRepo) => Promise<T>,
 ): Promise<T> {
   const dir = scope.checkoutDir(purpose);
@@ -108,14 +113,9 @@ export async function withCheckoutCell<T>(
 /** The definition's `probe` command in one cell from `imageRef` on a fresh checkout of `commit`. */
 export function runProbeOnCheckout(
   scope: EnvironmentCheckScope,
-  purpose: EnvironmentCheckoutPurpose,
-  role: string,
-  imageRef: string,
-  commit: string,
-  probe: string,
-  timeoutSeconds: number,
+  { probe, timeoutSeconds, ...checkout }: CheckoutCellOf & { readonly probe: string; readonly timeoutSeconds: number },
 ): Promise<EnvironmentTestRun> {
-  return withCheckoutCell(scope, purpose, role, imageRef, commit, (cell) => runEnvironmentCommand(cell, probe, timeoutSeconds, scope.signal));
+  return withCheckoutCell(scope, checkout, (cell) => runEnvironmentCommand(cell, probe, timeoutSeconds, scope.signal));
 }
 
 /**
@@ -125,12 +125,14 @@ export function runProbeOnCheckout(
  */
 export async function buildAndProbe(
   scope: EnvironmentCheckScope,
-  purpose: EnvironmentCheckoutPurpose,
-  commit: string,
-  definition: EnvironmentBuildContext,
-  probe: string,
-  role: string,
-  timeoutSeconds: number,
+  { purpose, commit, definition, probe, role, timeoutSeconds }: {
+    readonly purpose: EnvironmentCheckoutPurpose;
+    readonly commit: string;
+    readonly definition: EnvironmentBuildContext;
+    readonly probe: string;
+    readonly role: string;
+    readonly timeoutSeconds: number;
+  },
 ): Promise<EnvironmentCheckReport> {
   let built: BuiltEnvironment;
   try {
@@ -142,7 +144,7 @@ export async function buildAndProbe(
     if (err instanceof EnvironmentVersionUnresolved) return { kind: "definition_refused", detail: err.reason };
     throw err;
   }
-  const probeRun = await runProbeOnCheckout(scope, purpose, role, built.imageRef, commit, probe, timeoutSeconds);
+  const probeRun = await runProbeOnCheckout(scope, { purpose, role, imageRef: built.imageRef, commit, probe, timeoutSeconds });
   return {
     kind: "tested",
     version: built.version,

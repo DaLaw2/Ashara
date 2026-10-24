@@ -4,7 +4,7 @@ import { containEach, describeErrorChain } from "@ashara/shared";
 import { acceptanceUncoveredCause, projectBlockCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { SCAFFOLD_PLACEHOLDER_MARKER } from "./acl/quality-acl.js";
-import type { AcceptanceSweeper, AcceptanceUncovered } from "./acl/quality-acl.js";
+import type { AcceptanceSweeper, AcceptanceSweepRecord, AcceptanceUncovered, FailedSweepRecord, ReadyProject } from "./acl/quality-acl.js";
 import type { WorkItemRepository } from "./domain/index.js";
 import { giveUpAcceptanceDefect, openAcceptanceDefect, PlanningService, takeEvents } from "./domain/index.js";
 import type { InterfaceDefect, PlaceholderDefect } from "./domain/index.js";
@@ -29,29 +29,6 @@ import { INFRASTRUCTURE_FAULT_BUDGET } from "./execution/halt-causes.js";
 // that keeps failing to run never loops. Any other failure of one project's sweep, a store write included, is
 // contained to that project (containEach).
 
-/** A project ready for its sweep, as the acceptance store lists it. */
-interface ReadyProject {
-  readonly projectId: ProjectId;
-  readonly workspacePath: string | null;
-  readonly goalTaskIds: readonly string[];
-  /** Its Completed product scaffolds and their recorded merges: the public interface file main must have moved on from. */
-  readonly scaffoldMerges: ReadonlyArray<{ readonly taskId: string; readonly mergeCommit: string | null }>;
-}
-
-/** What one sweep recorded, whatever its verdict. */
-interface SweepRecord {
-  readonly projectId: ProjectId;
-  /** null only for a sweep that faulted before main could be read. */
-  readonly mainCommit: string | null;
-  readonly environmentVersion: string | null;
-  readonly checkedTasks: readonly string[];
-  /** Completed implementation tasks with no stored check, which the sweep could not re-run. */
-  readonly uncheckedTasks: readonly string[];
-  /** Every stored check the sweep could run, with how it ended; none when it ran nothing. */
-  readonly checkOutcomes: Extract<Sweep, { readonly kind: "ran" }>["checkOutcomes"];
-  readonly details: string;
-}
-
 /** The acceptance store; the composition root supplies it. */
 export interface AcceptanceStore {
   /** Every project ready for its sweep, each read on its own: one whose rows do not read is its UnreadSubject. */
@@ -62,7 +39,7 @@ export interface AcceptanceStore {
    * it is no longer ready; Quality's uncovered outcome when a guarantee in force is not judged pass,
    * with nothing written.
    */
-  recordAccepted(sweep: SweepRecord & { readonly mainCommit: string }): Promise<"accepted" | "moved" | AcceptanceUncovered>;
+  recordAccepted(sweep: AcceptanceSweepRecord & { readonly mainCommit: string }): Promise<"accepted" | "moved" | AcceptanceUncovered>;
   /** Counts one sweep that could not run on the project (acceptance_sweep_faults); returns the count with it. */
   recordSweepFault(projectId: ProjectId): Promise<number>;
   /**
@@ -160,9 +137,6 @@ class AcceptanceFaultBudgetSpent extends Error {
 }
 
 type Sweep = Awaited<ReturnType<AcceptanceDeps["acceptanceSweeper"]["sweepForAcceptance"]>>;
-
-/** A failed sweep's record: the stored checks it ran and saw fail, none when it ran none. */
-type FailedSweepRecord = SweepRecord & { readonly failedChecks: Extract<Sweep, { readonly kind: "ran" }>["failedChecks"] };
 
 type Found = { readonly interfaceDefect: InterfaceDefect | null; readonly placeholderDefect: PlaceholderDefect | null };
 

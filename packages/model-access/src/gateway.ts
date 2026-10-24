@@ -198,14 +198,21 @@ export class LLMGateway {
    * the fallback retry and propagate it immediately instead —
    * SchemaValidationError and whatever the gate throws.
    */
-  private async withFallback<TRequest extends TierAsk & { site?: KnownLLMSite }, TResult>(
-    request: TRequest,
-    resolved: ResolvedProvider,
-    execute: (request: TRequest, resolved: ResolvedProvider) => Promise<TResult>,
-    label: string,
-    shouldRethrow: (error: unknown) => boolean,
-    excluded: readonly string[],
-  ): Promise<TResult> {
+  private async withFallback<TRequest extends TierAsk & { site?: KnownLLMSite }, TResult>({
+    request,
+    resolved,
+    execute,
+    label,
+    shouldRethrow,
+    excluded,
+  }: {
+    readonly request: TRequest;
+    readonly resolved: ResolvedProvider;
+    readonly execute: (request: TRequest, resolved: ResolvedProvider) => Promise<TResult>;
+    readonly label: string;
+    readonly shouldRethrow: (error: unknown) => boolean;
+    readonly excluded: readonly string[];
+  }): Promise<TResult> {
     try {
       return await execute(request, resolved);
     } catch (error) {
@@ -342,7 +349,7 @@ export class LLMGateway {
       requestBytes: utf8Bytes(request.system, JSON.stringify(request.messages), JSON.stringify(request.tools)),
       maxOutputTokens: budget.maxOutputTokens,
     };
-    const { result, requestedAt, admitted } = await this.send(scope, target, operation, size, request.abortSignal, () => generateText(params)).catch(
+    const { result, requestedAt, admitted } = await this.send({ scope, resolved: target, operation, size, abortSignal: request.abortSignal, request: () => generateText(params) }).catch(
       (error: unknown) => {
         if (error instanceof GateThrew || error instanceof ModelCallAborted) throw error;
         const overflow = contextOverflowOf(error, this.contextOverflow);
@@ -383,7 +390,7 @@ export class LLMGateway {
     ];
     if (issues.length > 0 || !("assistant" in message)) {
       const invalid = new TurnResponseInvalid({ provider: target.providerName, model: target.modelConfig.id, issues });
-      await this.settle(admitted, requestedAt, extraction, recordedReason, errorOutcome(invalid), invalid);
+      await this.settle(admitted, { requestedAt, usage: extraction, finishReason: recordedReason, outcome: errorOutcome(invalid), providerError: invalid });
       // A response not in the API's shape is the provider's failure, as for a structured request.
       throw new ProviderError(target.providerName, `turn response on model=${target.modelConfig.id} unreadable`, "provider", { cause: invalid });
     }
@@ -394,7 +401,7 @@ export class LLMGateway {
       finishReason === "provider_error"
         ? { kind: "error", errorKind: `FinishReason:${String(result.finishReason ?? "missing")}` }
         : OK;
-    await this.settle(admitted, requestedAt, extraction, recordedReason, outcome);
+    await this.settle(admitted, { requestedAt, usage: extraction, finishReason: recordedReason, outcome });
 
     return {
       assistant: message.assistant,
@@ -420,7 +427,7 @@ export class LLMGateway {
     const opinion = request.secondOpinion;
     if (opinion === undefined) {
       const routed = request.judges === undefined ? this.registry.resolve(request.capability, [], request.site) : this.judge(request.judges, [], request.site);
-      return this.withFallback(request, routed, execute, "structured request", rethrown, []);
+      return this.withFallback({ request, resolved: routed, execute, label: "structured request", shouldRethrow: rethrown, excluded: [] });
     }
     // A second opinion goes only to a model of the strength it asks for: the catalog has one or the
     // request is refused unsent, and its failover is only what its strength's rule allows. Moving to
@@ -434,7 +441,7 @@ export class LLMGateway {
     }
     try {
       return rules.secondOpinion[opinion.strength].failover === "other-providers"
-        ? await this.withFallback(request, resolved, execute, "structured request", rethrown, [opinion.avoid.provider])
+        ? await this.withFallback({ request, resolved, execute, label: "structured request", shouldRethrow: rethrown, excluded: [opinion.avoid.provider] })
         : await this.pinned(request, resolved, execute, "structured request", rethrown);
     } catch (error) {
       if (!(error instanceof ProviderError)) throw error;
@@ -506,14 +513,14 @@ export class LLMGateway {
    * continues; one that `abortSignal` cancelled is settled as `aborted` and
    * throws ModelCallAborted. Once `abortSignal` has aborted, nothing is admitted or sent.
    */
-  private async send<R>(
-    scope: CallScope,
-    resolved: CallTarget,
-    operation: LlmCallOperation,
-    size: RequestSize,
-    abortSignal: AbortSignal,
-    request: () => Promise<R>,
-  ): Promise<{ readonly result: R; readonly requestedAt: Date; readonly admitted: AdmittedCall }> {
+  private async send<R>({ scope, resolved, operation, size, abortSignal, request }: {
+    readonly scope: CallScope;
+    readonly resolved: CallTarget;
+    readonly operation: LlmCallOperation;
+    readonly size: RequestSize;
+    readonly abortSignal: AbortSignal;
+    readonly request: () => Promise<R>;
+  }): Promise<{ readonly result: R; readonly requestedAt: Date; readonly admitted: AdmittedCall }> {
     if (abortSignal.aborted) throw new ModelCallAborted({ stage: "before-send" }, abortSignal.reason);
     const admitted: AdmittedCall = {
       gate: scope.gate,
@@ -537,7 +544,7 @@ export class LLMGateway {
     } catch (error) {
       const usage = usageOfFailedRequest(error);
       if (abortSignal.aborted) {
-        await this.settle(admitted, requestedAt, usage, "no-response", ABORTED, error);
+        await this.settle(admitted, { requestedAt, usage, finishReason: "no-response", outcome: ABORTED, providerError: error });
         throw new ModelCallAborted(
           { stage: "in-flight", provider: resolved.providerName, model: resolved.modelConfig.id, callId: admitted.request.callId },
           abortSignal.reason,
@@ -545,7 +552,7 @@ export class LLMGateway {
         );
       }
       const failure = failureOfRequest(error);
-      await this.settle(admitted, requestedAt, usage, failure.finishReason, failure.outcome, error);
+      await this.settle(admitted, { requestedAt, usage, finishReason: failure.finishReason, outcome: failure.outcome, providerError: error });
       throw configurationRejectionOf(error, resolved) ?? error;
     }
   }
@@ -553,11 +560,13 @@ export class LLMGateway {
   /** Settles an admitted provider request through its gate. A throw from the gate fails the call (Discipline A). */
   private async settle(
     admitted: AdmittedCall,
-    requestedAt: Date,
-    usage: ExtractedUsage | null,
-    finishReason: LlmFinishReason,
-    outcome: LlmCallOutcome,
-    providerError?: unknown,
+    { requestedAt, usage, finishReason, outcome, providerError }: {
+      readonly requestedAt: Date;
+      readonly usage: ExtractedUsage | null;
+      readonly finishReason: LlmFinishReason;
+      readonly outcome: LlmCallOutcome;
+      readonly providerError?: unknown;
+    },
   ): Promise<void> {
     try {
       await admitted.gate.settle({ ...admitted.request, requestedAt, usage, finishReason, outcome, providerError });
@@ -606,7 +615,7 @@ export class LLMGateway {
       readonly admitted: AdmittedCall;
     };
     try {
-      sent = await this.send(scope, resolved, operation, size, request.abortSignal, call);
+      sent = await this.send({ scope, resolved, operation, size, abortSignal: request.abortSignal, request: call });
     } catch (error) {
       if (!NoObjectGeneratedError.isInstance(error)) throw error;
       throw structuredFailureOf(error, resolved, budget);
@@ -619,7 +628,7 @@ export class LLMGateway {
     // An object the SDK parsed from output cut off at maxTokens is still cut
     // off: the text happened to close, the model did not finish.
     if (finishReason === "length") {
-      await this.settle(admitted, requestedAt, extraction, finishReason, TRUNCATED);
+      await this.settle(admitted, { requestedAt, usage: extraction, finishReason, outcome: TRUNCATED });
       throw new StructuredOutputTruncated({
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
@@ -633,7 +642,7 @@ export class LLMGateway {
       });
     }
 
-    await this.settle(admitted, requestedAt, extraction, finishReason, OK);
+    await this.settle(admitted, { requestedAt, usage: extraction, finishReason, outcome: OK });
 
     return {
       data: result.object,
@@ -672,9 +681,14 @@ export class LLMGateway {
       abortSignal: request.abortSignal,
     };
     const size: RequestSize = { requestBytes, maxOutputTokens: budget.maxOutputTokens };
-    const { result, requestedAt, admitted } = await this.send(scope, resolved, operation, size, request.abortSignal, () =>
-      generateText(params),
-    );
+    const { result, requestedAt, admitted } = await this.send({
+      scope,
+      resolved,
+      operation,
+      size,
+      abortSignal: request.abortSignal,
+      request: () => generateText(params),
+    });
 
     // `result.usage` sums the steps and drops each step's raw usage; with no
     // tools there is one step, whose usage keeps it.
@@ -685,7 +699,7 @@ export class LLMGateway {
     // Checked before any parse: a value cut off at maxTokens is never parsed,
     // even when the text that arrived happens to be valid JSON.
     if (finishReason === "length") {
-      await this.settle(admitted, requestedAt, extraction, finishReason, TRUNCATED);
+      await this.settle(admitted, { requestedAt, usage: extraction, finishReason, outcome: TRUNCATED });
       throw new StructuredOutputTruncated({
         provider: resolved.providerName,
         model: resolved.modelConfig.id,
@@ -699,7 +713,7 @@ export class LLMGateway {
 
     const parsed = parseStructuredText(result.text, request.schema);
     if (parsed.ok) {
-      await this.settle(admitted, requestedAt, extraction, finishReason, OK);
+      await this.settle(admitted, { requestedAt, usage: extraction, finishReason, outcome: OK });
       return {
         data: parsed.data,
         usage: extraction.usage,
@@ -709,9 +723,11 @@ export class LLMGateway {
       };
     }
 
-    await this.settle(admitted, requestedAt, extraction, finishReason, {
-      kind: "error",
-      errorKind: parsed.errorKind,
+    await this.settle(admitted, {
+      requestedAt,
+      usage: extraction,
+      finishReason,
+      outcome: { kind: "error", errorKind: parsed.errorKind },
     });
     throw new SchemaValidationError([...parsed.errors, `Raw LLM response: ${result.text.slice(0, 500)}`], resolved.modelConfig.id);
   }

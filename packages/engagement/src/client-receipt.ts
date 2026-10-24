@@ -47,7 +47,7 @@ export interface DueReceipt {
 }
 
 /** A receipt to post: its body, and whether the message is consumed with it (a closed project's). */
-interface ReceiptWrite {
+export interface ReceiptWrite {
   readonly due: DueReceipt;
   readonly body: string;
   readonly closes: boolean;

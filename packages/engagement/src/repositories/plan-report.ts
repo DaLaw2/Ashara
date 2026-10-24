@@ -1,5 +1,6 @@
 import type { DbHandle } from "@ashara/db";
 import type { ProjectId } from "@ashara/shared";
+import type { PlanRevisionToTell } from "@ashara/delivery/reads";
 import type { PlanReportSubject } from "../report-subjects.js";
 import { insertOutboundReport, postOnSubject } from "./client-message.js";
 import { recordTold, tellOnce } from "./told-report.js";
@@ -45,13 +46,6 @@ export async function postPlanReport(
     if (recorded !== revisionIds.length) throw new RevisionsNotFoldable(projectId, revisionIds, recorded);
     return "posted";
   });
-}
-
-/** A plan revision as its report is posted: its project and the client message whose correction it took in (null for a repair). */
-export interface PlanRevisionToTell {
-  readonly revisionId: string;
-  readonly projectId: string;
-  readonly requestedBy: string | null;
 }
 
 /**

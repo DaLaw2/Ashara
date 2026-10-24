@@ -40,14 +40,14 @@ export async function recordFailedApproach(
 ): Promise<void> {
   try {
     const epicId = await epicIdOf();
-    await failedApproachRepo.record(
-      task.projectId,
-      task.id,
+    await failedApproachRepo.record({
+      projectId: task.projectId,
+      taskId: task.id,
       epicId,
-      task.title,
-      errorDetail,
-      typeof learned === "object" ? routedLesson(task.title, learned, errorDetail) : (learned ?? errorDetail),
-    );
+      title: task.title,
+      reason: errorDetail,
+      learned: typeof learned === "object" ? routedLesson(task.title, learned, errorDetail) : (learned ?? errorDetail),
+    });
   } catch (e) {
     // eslint-disable-next-line ashara/catch-continue -- best effort: a lesson is context for later briefs; a lost one is absent from them, never rendered as none, and no verdict, counter or charge reads it
     console.warn(`[${task.id}] failed to record failed approach:`, e);

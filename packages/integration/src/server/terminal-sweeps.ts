@@ -6,7 +6,6 @@ import { createTerminalSweepStore } from "@ashara/server/acceptance-store";
  * one that could not run on a commit: the core loop's terminal-sweep step, which runs before any
  * report that carries the guarantee table, with no substrate behind it. Every other suite's
  * terminal is left alone.
- * @testseam the integration tests that post terminal reports outside the core loop; production runs runTerminalSweeps
  */
 export async function sweepTerminalsOf(db: ReturnType<typeof createDb>, ours: (projectId: string) => boolean): Promise<void> {
   const store = createTerminalSweepStore(db);

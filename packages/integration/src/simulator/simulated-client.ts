@@ -74,28 +74,37 @@ export class SimulatedClient {
 
   /** Posts a tender for a new project; its id when the server created it. */
   async tender(app: ClientRoutes, projectName: string, body: string): Promise<ClientReply<string>> {
-    return this.call(
-      app,
-      "POST",
-      "/client/api/tenders",
-      { projectName, body },
-      201,
-      (value) => TenderCreatedSchema.parse(value).projectId,
-    );
+    return this.call(app, {
+      method: "POST",
+      path: "/client/api/tenders",
+      body: { projectName, body },
+      expected: 201,
+      read: (value) => TenderCreatedSchema.parse(value).projectId,
+    });
   }
 
   /** The projects this client owns, as the server lists them. */
   async projects(
     app: ClientRoutes,
   ): Promise<ClientReply<ReadonlyArray<{ readonly id: string; readonly name: string }>>> {
-    return this.call(app, "GET", "/client/api/projects", null, 200, (value) => ProjectListSchema.parse(value));
+    return this.call(app, {
+      method: "GET",
+      path: "/client/api/projects",
+      body: null,
+      expected: 200,
+      read: (value) => ProjectListSchema.parse(value),
+    });
   }
 
   /** One project's messages, both ways, in the server's order. */
   async messages(app: ClientRoutes, projectId: string): Promise<ClientReply<readonly ListedMessage[]>> {
-    return this.call(app, "GET", `/client/api/projects/${projectId}/messages`, null, 200, (value) =>
-      MessageListSchema.parse(value),
-    );
+    return this.call(app, {
+      method: "GET",
+      path: `/client/api/projects/${projectId}/messages`,
+      body: null,
+      expected: 200,
+      read: (value) => MessageListSchema.parse(value),
+    });
   }
 
   /** Posts a stop, a change or an answer on one project. */
@@ -106,7 +115,13 @@ export class SimulatedClient {
       | { readonly kind: "stop" | "change"; readonly body: string }
       | { readonly kind: "answer"; readonly body: string; readonly inReplyTo: string },
   ): Promise<ClientReply<null>> {
-    return this.call(app, "POST", `/client/api/projects/${projectId}/messages`, message, 201, () => null);
+    return this.call(app, {
+      method: "POST",
+      path: `/client/api/projects/${projectId}/messages`,
+      body: message,
+      expected: 201,
+      read: () => null,
+    });
   }
 
   private async login(app: ClientRoutes): Promise<ClientReply<null>> {
@@ -135,11 +150,13 @@ export class SimulatedClient {
    */
   private async call<T>(
     app: ClientRoutes,
-    method: "GET" | "POST",
-    path: string,
-    body: unknown,
-    expected: number,
-    read: (value: unknown) => T,
+    { method, path, body, expected, read }: {
+      readonly method: "GET" | "POST";
+      readonly path: string;
+      readonly body: unknown;
+      readonly expected: number;
+      readonly read: (value: unknown) => T;
+    },
   ): Promise<ClientReply<T>> {
     if (this.cookie === null) {
       const login = await this.login(app);

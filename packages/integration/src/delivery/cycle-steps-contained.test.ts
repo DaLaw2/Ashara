@@ -163,7 +163,6 @@ const LISTINGS: Readonly<Record<string, Listing>> = {
   "packages/quality/src/repositories/acceptance.ts#listDueTerminalSweeps": { kind: "rows-only", why: "stop, halt episode and project ids and workspace paths as stored" },
   "packages/security/src/secret-store.ts#listNames": { kind: "not-a-step-listing", why: "the deployment's secret names" },
   "packages/server/src/intake-store.ts#openTenders": { kind: "rows-only", why: "message rows as stored" },
-  "packages/server/src/roster-store.ts#projectsAwaitingRoster": { kind: "rows-only", why: "each project with its vision row as stored" },
   "packages/workplace/src/dev-session-repository.ts#listActive": { kind: "not-a-step-listing", why: "the HTTP API's live sessions" },
 };
 

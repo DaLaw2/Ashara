@@ -184,7 +184,7 @@ describe("the harvest of a check attempt's files", () => {
     const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten(`./${AREA}run.py`);
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA, recordingLogger());
+    const harvest = await harvestCheckFiles({ repo: targetRepo(dir), taskId: "t1", startCommit: start, buildContext: ["environment/environment.toml"], written: recorder.writtenFiles(), area: AREA, logger: recordingLogger() });
     expect(harvest).toEqual({ kind: "harvested", files: [{ path: `${AREA}run.py`, content: "print('hi')\n" }], discarded: [] });
   });
 
@@ -202,7 +202,7 @@ describe("the harvest of a check attempt's files", () => {
     for (const path of [`${AREA}run.sh`, "README", "src/main.src", "checks/impl-2/other.sh"]) recorder.fileWritten(path);
 
     const logger = recordingLogger();
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml"], recorder.writtenFiles(), AREA, logger);
+    const harvest = await harvestCheckFiles({ repo: targetRepo(dir), taskId: "t1", startCommit: start, buildContext: ["environment/environment.toml"], written: recorder.writtenFiles(), area: AREA, logger });
     expect(harvest).toEqual({
       kind: "harvested",
       files: [{ path: `${AREA}run.sh`, content: "./tool | grep -q ok\n" }],
@@ -219,7 +219,7 @@ describe("the harvest of a check attempt's files", () => {
     const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten("manifest.txt");
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", "manifest.txt"], recorder.writtenFiles(), AREA, recordingLogger());
+    const harvest = await harvestCheckFiles({ repo: targetRepo(dir), taskId: "t1", startCommit: start, buildContext: ["environment/environment.toml", "manifest.txt"], written: recorder.writtenFiles(), area: AREA, logger: recordingLogger() });
     expect(harvest).toEqual({ kind: "harvested", files: [], discarded: ["manifest.txt"] });
   });
 
@@ -230,7 +230,7 @@ describe("the harvest of a check attempt's files", () => {
     const recorder = new CheckRecorder(["S1"]);
     recorder.fileWritten(`${AREA}input.txt`);
 
-    const harvest = await harvestCheckFiles(targetRepo(dir), "t1", start, ["environment/environment.toml", `${AREA}input.txt`], recorder.writtenFiles(), AREA, recordingLogger());
+    const harvest = await harvestCheckFiles({ repo: targetRepo(dir), taskId: "t1", startCommit: start, buildContext: ["environment/environment.toml", `${AREA}input.txt`], written: recorder.writtenFiles(), area: AREA, logger: recordingLogger() });
     expect(harvest).toMatchObject({ kind: "rejected", reason: expect.stringContaining("overlap the environment's recipe and inputs") });
   });
 });
@@ -288,7 +288,7 @@ describe("a check run that changes a tracked file of the checkout", () => {
       { label: "a later suite", checks: [{ name: "later", command: "echo later" }], files: [] },
     ];
 
-    const runs = await runSuitesOnCheckout(cells, "ci", "image", commit, join(root, "checkouts", "a"), suites);
+    const runs = await runSuitesOnCheckout(cells, { role: "ci", image: "image", commit, dir: join(root, "checkouts", "a") }, suites);
 
     expect(runs).toHaveLength(1);
     expect(runs[0]?.report).toMatchObject({ kind: "product_changed", check: "replaces the product", paths: ["src/main.src"] });
@@ -300,7 +300,7 @@ describe("a check run that changes a tracked file of the checkout", () => {
 
   test("check files that would replace a tracked product file are unrunnable before any check runs", async () => {
     const { root, commit, cells } = await target();
-    const runs = await runSuitesOnCheckout(cells, "ci", "image", commit, join(root, "checkouts", "b"), [
+    const runs = await runSuitesOnCheckout(cells, { role: "ci", image: "image", commit, dir: join(root, "checkouts", "b") }, [
       { label: "an old set", checks: [{ name: "c", command: "echo ran" }], files: [{ path: "src/main.src", content: "replaced\n" }] },
     ]);
     expect(runs[0]?.report).toEqual({ kind: "product_changed", check: null, paths: ["src/main.src"], runs: [] });
@@ -308,7 +308,7 @@ describe("a check run that changes a tracked file of the checkout", () => {
 
   test("a check that writes only untracked files and its own check files runs to a verdict", async () => {
     const { root, commit, cells } = await target();
-    const runs = await runSuitesOnCheckout(cells, "ci", "image", commit, join(root, "checkouts", "c"), [
+    const runs = await runSuitesOnCheckout(cells, { role: "ci", image: "image", commit, dir: join(root, "checkouts", "c") }, [
       { label: "clean", checks: [{ name: "c", command: "mkdir -p build && echo out > build/o && echo out > checks/x/log && echo ran" }], files: [{ path: "checks/x/run.sh", content: "true\n" }] },
     ]);
     expect(runs[0]?.report).toMatchObject({ kind: "ran", runs: [{ name: "c", exitCode: 0 }] });

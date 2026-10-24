@@ -5,14 +5,14 @@ import type { Database } from "@ashara/db";
 export class KnowledgeRepository {
   constructor(private readonly db: Database) {}
 
-  async storeKnowledgeFinding(
-    projectId: string,
-    taskId: string,
-    epicId: string | null,
-    title: string,
-    content: string,
-    tags: string[],
-  ) {
+  async storeKnowledgeFinding({ projectId, taskId, epicId, title, content, tags }: {
+    readonly projectId: string;
+    readonly taskId: string;
+    readonly epicId: string | null;
+    readonly title: string;
+    readonly content: string;
+    readonly tags: readonly string[];
+  }) {
     await this.db.insert(knowledgeEntries).values({
       kind: "finding",
       title,
@@ -22,7 +22,7 @@ export class KnowledgeRepository {
       epicId,
       sourceTaskId: taskId,
       eventTime: new Date(),
-      tags,
+      tags: [...tags],
     });
   }
 

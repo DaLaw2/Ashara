@@ -22,8 +22,9 @@ import { assignmentViolations } from "./work-kind.js";
 const FIRST_REVISION = 1;
 
 /** Vision v1 of a project with no roster, as stored; read inside the step through Engagement's published reader. */
-interface VisionAwaitingRoster {
+export interface VisionAwaitingRoster {
   readonly projectId: ProjectId;
+  /** Vision v1 as Engagement's storedVisionVersion selects it, read by derivation inside its step. */
   readonly vision: unknown;
 }
 

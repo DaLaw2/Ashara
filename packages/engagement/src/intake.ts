@@ -172,14 +172,14 @@ export type ReadingConfirmation =
   | { readonly kind: "unconfirmed"; readonly passedOver: readonly [PassedOver, ...PassedOver[]] };
 
 /** The tender's reading as intake_readings records it. */
-export interface IntakeReading {
+interface IntakeReading {
   readonly first: ReadingModel;
   readonly firstQuestions: number;
   readonly confirmation: ReadingConfirmation;
 }
 
 /** An inbound tender not yet consumed, as the intake store reads it. */
-interface OpenTender {
+export interface OpenTender {
   readonly id: string;
   readonly projectId: ProjectId;
   readonly body: string;
@@ -187,7 +187,7 @@ interface OpenTender {
   readonly intakeLastError: string | null;
 }
 
-interface IntakeWrite {
+export interface IntakeWrite {
   readonly tender: OpenTender;
   /** Question bodies as posted to the client, most impactful first; the store keeps this order. */
   readonly questions: readonly string[];
@@ -199,7 +199,7 @@ interface IntakeWrite {
   readonly vision: (questionMessageIds: readonly string[]) => FirstVision;
 }
 
-type IntakeCommit =
+export type IntakeCommit =
   | { readonly kind: "recorded"; readonly questionIds: readonly string[] }
   | { readonly kind: "vision-exists"; readonly visionVersion: number }
   /** The project no longer reads the tender now under its row lock: nothing was written and the tender stays unconsumed. */

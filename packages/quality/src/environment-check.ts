@@ -135,7 +135,14 @@ async function checkEnvironmentWork(scope: EnvironmentCheckScope, testTimeoutSec
   }
   const refused = await outOfScope(scope, commit, definition);
   if (refused !== null) return refused;
-  return buildAndProbe(scope, "environment-check", commit, definition, definition.probe, "environment-check", testTimeoutSeconds);
+  return buildAndProbe(scope, {
+    purpose: "environment-check",
+    commit,
+    definition,
+    probe: definition.probe,
+    role: "environment-check",
+    timeoutSeconds: testTimeoutSeconds,
+  });
 }
 
 /** The substrate gate's verdict on environment work's committed work. */
@@ -160,7 +167,14 @@ export async function runSubstrateGate(scope: EnvironmentCheckScope, testTimeout
   }
   const refused = await outOfScope(scope, head, definition);
   if (refused !== null) return { report: refused, tested: null };
-  const report = await buildAndProbe(scope, "substrate-gate", head, definition, definition.probe, "ci", testTimeoutSeconds);
+  const report = await buildAndProbe(scope, {
+    purpose: "substrate-gate",
+    commit: head,
+    definition,
+    probe: definition.probe,
+    role: "ci",
+    timeoutSeconds: testTimeoutSeconds,
+  });
   return { report, tested: report.kind === "tested" ? { version: report.version, imageRef: report.imageRef, definition } : null };
 }
 
@@ -175,7 +189,14 @@ export function runPostMergeProbe(
   commit: string,
   timeoutSeconds: number,
 ): Promise<EnvironmentTestRun> {
-  return runProbeOnCheckout(scope, "verify-probe", role, tested.imageRef, commit, tested.definition.probe, timeoutSeconds);
+  return runProbeOnCheckout(scope, {
+    purpose: "verify-probe",
+    role,
+    imageRef: tested.imageRef,
+    commit,
+    probe: tested.definition.probe,
+    timeoutSeconds,
+  });
 }
 
 /**
@@ -187,13 +208,17 @@ export function runPostMergeProbe(
  */
 export function runFoundationBuild(
   scope: EnvironmentCheckScope,
-  role: string,
-  imageRef: string,
-  commit: string,
-  definition: EnvironmentDefinition,
-  timeoutSeconds: number,
+  { role, imageRef, commit, definition, timeoutSeconds }: {
+    readonly role: string;
+    readonly imageRef: string;
+    readonly commit: string;
+    readonly definition: EnvironmentDefinition;
+    readonly timeoutSeconds: number;
+  },
 ): Promise<EnvironmentTestRun> {
-  return withCheckoutCell(scope, "foundation-build", role, imageRef, commit, (cell) => runEnvironmentCommand(cell, definition.build, timeoutSeconds, scope.signal));
+  return withCheckoutCell(scope, { purpose: "foundation-build", role, imageRef, commit }, (cell) =>
+    runEnvironmentCommand(cell, definition.build, timeoutSeconds, scope.signal),
+  );
 }
 
 /**
@@ -210,7 +235,7 @@ export function runPostMergeEnvironmentCommands(
   commit: string,
   timeoutSeconds: number,
 ): Promise<EnvironmentCommandsRun> {
-  return withCheckoutCell(scope, "verify", role, tested.imageRef, commit, async (cell, repo): Promise<EnvironmentCommandsRun> => {
+  return withCheckoutCell(scope, { purpose: "verify", role, imageRef: tested.imageRef, commit }, async (cell, repo): Promise<EnvironmentCommandsRun> => {
     const build = await runEnvironmentCommand(cell, tested.definition.build, timeoutSeconds, scope.signal);
     if (!environmentBuildPassed(build)) return { kind: "build_failed", build };
     const test = await runEnvironmentCommand(cell, tested.definition.test, timeoutSeconds, scope.signal);

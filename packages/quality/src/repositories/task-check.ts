@@ -3,9 +3,8 @@ import { z } from "zod";
 import { heldSetRejections, suiteReviewFindings, taskChecks } from "@ashara/db/schema/quality";
 import type { Database } from "@ashara/db";
 import { CapabilityLevelSchema } from "@ashara/finance";
-import type { CapabilityLevel } from "@ashara/finance";
 import { attemptsWithModel, unheldItems } from "@ashara/workplace";
-import type { HoldEvidence } from "@ashara/workplace";
+import type { CheckDefinition, DefinedCheck, HoldEvidence } from "@ashara/workplace";
 import {
   checkTasksOfReview,
   completedImplementationTaskIds,
@@ -17,8 +16,7 @@ import {
   parseWorkItemJsonb,
   workItemSummaries,
 } from "../acl/delivery-acl.js";
-import type { VisionSource } from "../acl/engagement-acl.js";
-import type { SetRejection } from "../task-checks.js";
+import type { CheckFoundation, CheckTaskUnderReview, CompletedTaskChecks, CompletedTasksChecks, ProjectTaskChecks, SetRejection, StoredCheckFile } from "../task-checks.js";
 import { inLatestCheckRevision, latestCheckRevision, StoredDecidesSchema } from "../stored-checks.js";
 import { recordReauthoredRevisionOutcomes } from "./reviewer-outcome.js";
 
@@ -53,23 +51,6 @@ const StoredRevisionSchema = z.number().int().positive().nullable();
 /** The models a task's attempts ran on, each with its catalog grade (Workplace's attempt log, graded by Finance's attemptGrade). */
 const AttemptModelSchema = z.strictObject({ model: z.string().min(1), grade: CapabilityLevelSchema.nullable() });
 
-type AttemptModels = ReadonlyArray<z.infer<typeof AttemptModelSchema>>;
-
-interface TaskCheckDefinition {
-  readonly name: string;
-  readonly command: string;
-}
-
-/** A check as its author defined it: with the items it decides, never none. */
-interface DefinedTaskCheck extends TaskCheckDefinition {
-  readonly decides: readonly [string, ...string[]];
-}
-
-/** A stored check: the items it decides, or null when its row records none (written before decides was recorded). */
-interface StoredTaskCheck extends TaskCheckDefinition {
-  readonly decides: DefinedTaskCheck["decides"] | null;
-}
-
 /** One revision of an implementation task's checks, as the check task harvested it. */
 interface NewTaskChecks {
   readonly projectId: string;
@@ -78,28 +59,9 @@ interface NewTaskChecks {
   readonly environmentVersion: string;
   /** The commit the checks were red-run on: their plan revision's foundation. */
   readonly baselineCommit: string;
-  readonly checks: readonly DefinedTaskCheck[];
+  readonly checks: readonly DefinedCheck[];
   readonly files: readonly TaskCheckFile[];
 }
-
-interface TaskChecksRecord {
-  readonly taskId: string;
-  readonly checkTaskId: string;
-  readonly revision: number;
-  readonly environmentVersion: string;
-  /** null for a revision written before baselines were recorded, whose red run's commit nothing recorded. */
-  readonly baselineCommit: string | null;
-  readonly checks: readonly StoredTaskCheck[];
-  readonly files: readonly TaskCheckFile[];
-}
-
-/**
- * A check task's foundation: the merged task its checks are red-run against,
- * or why there is none to red-run against.
- */
-type CheckFoundation =
-  | { readonly kind: "found"; readonly taskId: string; readonly commit: string }
-  | { readonly kind: "none"; readonly reason: string };
 
 /** A revision with no check: an empty revision would read as "nothing to check". */
 class TaskChecksEmpty extends Error {
@@ -129,28 +91,6 @@ class CheckedTaskMissing extends Error {
   }
 }
 
-/** A check task a review reads, as stored; nulls are what the row does not record. */
-interface CheckTaskUnderReview {
-  readonly id: string;
-  readonly status: string;
-  readonly checksFor: string | null;
-  readonly visionItems: readonly string[] | null;
-  readonly sources: readonly VisionSource[] | null;
-  readonly checkedTitle: string | null;
-  /** How many reviews have reopened it: its suite_review_findings rows. */
-  readonly reviewReopens: number;
-  /** The grade its task was dispatched at (task_spec.capability); null when the row records none. */
-  readonly grade: CapabilityLevel | null;
-  /** Every model an attempt on it ran on, oldest first, each with its catalog grade; null for a model the catalog does not hold under the attempt's provider. */
-  readonly attemptModels: AttemptModels;
-}
-
-interface CompletedChecks {
-  readonly checked: TaskChecksRecord[];
-  /** Completed implementation tasks with no stored check: nothing of theirs can be re-run. */
-  readonly unchecked: string[];
-}
-
 /**
  * The checks of a stored revision that the next one drops or changes, and those it keeps as they
  * were. A check is its command run over the revision's files, so changed files change every check.
@@ -159,7 +99,7 @@ function comparedChecks(
   taskId: string,
   revision: number,
   previous: ReadonlyArray<{ readonly name: string; readonly command: string; readonly files: unknown }>,
-  next: readonly TaskCheckDefinition[],
+  next: readonly CheckDefinition[],
   nextFiles: readonly TaskCheckFile[],
 ): { readonly changed: ReadonlySet<string>; readonly kept: ReadonlySet<string> } {
   const commands = new Map(next.map((check) => [check.name, check.command]));
@@ -346,9 +286,9 @@ export class TaskCheckRepository {
    * before checks existed), so a caller states them instead of reading their absence as "nothing to
    * regress".
    */
-  async completedOf(projectId: string, exceptTaskId: string | null): Promise<CompletedChecks> {
+  async completedOf(projectId: string, exceptTaskId: string | null): Promise<CompletedTasksChecks> {
     const tasks = await completedImplementationTaskIds(this.db, projectId, exceptTaskId, "completed");
-    const checked: TaskChecksRecord[] = [];
+    const checked: CompletedTaskChecks[] = [];
     const unchecked: string[] = [];
     for (const taskId of tasks) {
       const record = await this.latest(taskId);
@@ -363,7 +303,7 @@ export class TaskCheckRepository {
    * path. Read for the ownership gate: a stored check file is the check author's, whatever the
    * status of the task it decides.
    */
-  async checkFilesOf(projectId: string): Promise<Array<{ readonly taskId: string; readonly path: string }>> {
+  async checkFilesOf(projectId: string): Promise<StoredCheckFile[]> {
     const rows = await this.db
       .selectDistinct({ taskId: taskChecks.taskId, revision: taskChecks.revision, files: taskChecks.files })
       .from(taskChecks)
@@ -374,7 +314,7 @@ export class TaskCheckRepository {
         ),
       )
       .orderBy(asc(taskChecks.taskId));
-    const paths = new Map<string, { readonly taskId: string; readonly path: string }>();
+    const paths = new Map<string, StoredCheckFile>();
     for (const row of rows) {
       const parsed = TaskCheckFilesSchema.safeParse(row.files);
       if (!parsed.success) throw new TaskChecksCorrupt(row.taskId, row.revision, `files: ${z.prettifyError(parsed.error)}`);
@@ -388,12 +328,12 @@ export class TaskCheckRepository {
    * Abandoned (their checks never run again), each with its task's title, oldest task first. What
    * a check author is shown so the checks it writes do not contradict them.
    */
-  async storedOfProject(projectId: string, exceptTaskId: string): Promise<Array<TaskChecksRecord & { readonly title: string }>> {
+  async storedOfProject(projectId: string, exceptTaskId: string): Promise<ProjectTaskChecks[]> {
     const checkedIds = await this.db.selectDistinct({ taskId: taskChecks.taskId }).from(taskChecks).where(eq(taskChecks.projectId, projectId));
     const tasks = (await workItemSummaries(this.db, checkedIds.map((row) => row.taskId).filter((id) => id !== exceptTaskId)))
       .filter((task) => task.status !== ABANDONED)
       .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-    const stored: Array<TaskChecksRecord & { readonly title: string }> = [];
+    const stored: ProjectTaskChecks[] = [];
     for (const task of tasks) {
       const record = await this.latest(task.id);
       if (record === null) throw new TaskChecksCorrupt(task.id, 0, "a task_checks row names it, but no revision of it reads back");
@@ -440,7 +380,7 @@ export class TaskCheckRepository {
   }
 
   /** The task's latest revision of checks, or null when none was ever recorded. */
-  async latest(taskId: string): Promise<TaskChecksRecord | null> {
+  async latest(taskId: string): Promise<CompletedTaskChecks | null> {
     const rows = await this.db
       .select()
       .from(taskChecks)

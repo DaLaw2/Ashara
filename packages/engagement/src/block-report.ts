@@ -102,7 +102,7 @@ export type ProjectBlockedReport =
  * A recorded resumption the client has not been told about: `how` the halt ended, an owner's unblock,
  * the substrate probe passing after an infrastructure halt, or the client's answer read after a client_wait halt.
  */
-interface DueResumption {
+export interface DueResumption {
   readonly episodeId: string;
   readonly projectId: ProjectId;
   readonly how: "unblocked" | "probe_passed" | "answered";

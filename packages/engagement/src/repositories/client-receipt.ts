@@ -6,7 +6,7 @@ import { HALT_KINDS } from "@ashara/delivery/predicates";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import { INBOUND_KINDS } from "../inbound-policy.js";
 import { receiptSubject } from "../client-receipt.js";
-import type { DueReceipt, ProjectStanding } from "../client-receipt.js";
+import type { DueReceipt, ProjectStanding, ReceiptWrite } from "../client-receipt.js";
 import { LockedStanding, consumeInbound, dueReceiptMessages, inboundMessageOf, postReceiptOf, projectStandingColumns } from "./client-message.js";
 
 // The receipts owed to the client's messages: an inbound message is owed one until an outbound
@@ -99,7 +99,7 @@ class ReceiptCannotClose extends Error {
  */
 export async function postClientReceipt(
   db: Database,
-  write: { readonly due: DueReceipt; readonly body: string; readonly closes: boolean },
+  write: ReceiptWrite,
 ): Promise<"posted" | "already-posted" | "moved"> {
   const { due } = write;
   return db.transaction(async (tx) => {

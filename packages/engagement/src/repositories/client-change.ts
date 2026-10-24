@@ -9,7 +9,7 @@ import type { WorkBudgets } from "@ashara/finance";
 import { parseProjectId, readEach, type ProjectId, type UnreadSubject } from "@ashara/shared";
 import type { HoldCorrection } from "../ports.js";
 import { MAX_CHANGE_ATTEMPTS } from "../client-change.js";
-import type { CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
+import type { CorrectionRecording, CorrectionWrite, OpenChange, StoredProposal } from "../client-change.js";
 import { affectedKeys } from "../correction.js";
 import type { ChangeImpact, CitingTask } from "../correction.js";
 import { Vision } from "../vision.js";
@@ -232,7 +232,7 @@ export async function recordCorrection(
   db: Database,
   write: CorrectionWrite,
   hold: HoldCorrection,
-): Promise<{ readonly kind: "recorded" } | { readonly kind: "already-consumed" } | { readonly kind: "moved"; readonly detail: string }> {
+): Promise<CorrectionRecording> {
   try {
     return { kind: await writeCorrection(db, write, hold) };
   } catch (err) {

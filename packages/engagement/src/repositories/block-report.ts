@@ -12,6 +12,7 @@ import { haltReported, noOpenStop, reportTold, visionWritten } from "../predicat
 import { REPORT_SUBJECT } from "../report-subjects.js";
 import { insertOutboundReport } from "./client-message.js";
 import { tellOnce } from "./told-report.js";
+import type { DueResumption } from "../block-report.js";
 
 // The Liaison's reports on project halts: one when a project is halted, one
 // when it returns to work (an owner's unblock, or the substrate probe passing after an
@@ -182,13 +183,6 @@ type HaltReportRow =
   | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "suite_review"; readonly review: BlockingReviewRow; readonly visionWritten: boolean }
   | { readonly episodeId: string; readonly projectId: ProjectId; readonly kind: "plan_repair"; readonly abandoned: readonly BlockingAbandonmentRow[]; readonly visionWritten: boolean };
 
-/** A resumption the client has not been told of. */
-interface DueResumptionRow {
-  readonly episodeId: string;
-  readonly projectId: ProjectId;
-  readonly how: "unblocked" | "probe_passed" | "answered";
-}
-
 const ResumeKindSchema = z.enum(["unblocked", "probe_passed", "answered"]);
 
 /** A project_blocks row holds a kind outside the vocabulary its CHECK admits. */
@@ -315,14 +309,14 @@ export async function haltReportOf(db: DbHandle, row: HaltEpisode, blockingRevie
  * the Liaison, is not reported on. Each episode is read on its own (readEach): one whose record does
  * not read as a report is that report's UnreadSubject, and every other report is still listed.
  */
-export async function listDueResumptionReports(db: DbHandle): Promise<Array<DueResumptionRow | UnreadSubject>> {
+export async function listDueResumptionReports(db: DbHandle): Promise<Array<DueResumption | UnreadSubject>> {
   const resumed = await endedHaltEpisodesWhere(db, (episode) =>
     and(episode.resumed, sql`NOT ${resumptionTold(episode.id)}`, haltTold(episode), haltsToldOf(episode.projectId)),
   );
   return readEach(
     resumed,
     (row) => ({ id: `project-resumed:${row.id}`, projectId: parseProjectId(row.projectId, "project_blocks.project_id") }),
-    (row): DueResumptionRow => ({ episodeId: row.id, projectId: parseProjectId(row.projectId, "project_blocks.project_id"), how: ResumeKindSchema.parse(row.endKind) }),
+    (row): DueResumption => ({ episodeId: row.id, projectId: parseProjectId(row.projectId, "project_blocks.project_id"), how: ResumeKindSchema.parse(row.endKind) }),
   );
 }
 

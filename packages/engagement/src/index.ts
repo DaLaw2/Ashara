@@ -23,7 +23,6 @@ export { TerminalReports } from "./terminal-report.js";
 export type { LiaisonTerminalReports, TerminalReportStore } from "./terminal-report.js";
 export { TERMINAL_KINDS } from "./predicates.js";
 export type { TerminalKind } from "./predicates.js";
-/** @testseam the integration terminal-message tests post a message of a subject directly, as a retried or restarted post does */
 export { TerminalMessage } from "./terminal-report.js";
 export { StackChoiceReports } from "./stack-choice.js";
 export { askTaskQuestion, taskQuestionAnswered } from "./client-question.js";
@@ -52,7 +51,6 @@ export { listDueReceipts, postClientReceipt } from "./repositories/client-receip
 export { listUnconsumedChanges, readChangeImpact, readOpenChange, recordChangeFailure, recordCorrection } from "./repositories/client-change.js";
 export { recordDeliveredReportFailure } from "./repositories/delivered-report.js";
 export { listDueTerminals, postTerminalMessage } from "./repositories/terminal-report.js";
-/** @testseam the integration tests build the table a message carries through the records reader, over the records they seed */
 export { terminalTableOf } from "./repositories/terminal-report.js";
 export { postPlanReport, postPlanRevisionReport } from "./repositories/plan-report.js";
 export { lastReportGuaranteeVerdictsOf } from "./repositories/guarantee-report.js";

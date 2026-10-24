@@ -13,7 +13,7 @@ import type { StoredVision, VisionAppend } from "./vision.js";
 // crash is still reported after the restart.
 
 /** A completed Sprint 0 task's statement whose project has not been told about it. */
-interface DueStackChoice {
+export interface DueStackChoice {
   readonly projectId: ProjectId;
   readonly taskId: string;
   readonly statement: string;
@@ -21,8 +21,9 @@ interface DueStackChoice {
   readonly vision: StoredVision | null;
 }
 
-interface StackChoiceWrite {
+export interface StackChoiceWrite {
   readonly projectId: ProjectId;
+  /** The vision version appended after the one the choice was composed against. */
   readonly vision: VisionAppend;
   /** The revision that writes it: Ashara's own, applied unapproved since it promises the client nothing new. */
   readonly revision: RevisionRecord;

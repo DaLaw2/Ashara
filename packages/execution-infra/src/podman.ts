@@ -413,15 +413,15 @@ interface HostIdentity {
   readonly gid: number;
 }
 
-function buildRunArgs(
-  spec: CellSpec,
-  name: string,
-  hostPath: string,
-  state: CellState,
-  limits: CellResourceLimits,
-  trace: string,
-  host: HostIdentity,
-): string[] {
+function buildRunArgs({ spec, name, hostPath, state, limits, trace, host }: {
+  readonly spec: CellSpec;
+  readonly name: string;
+  readonly hostPath: string;
+  readonly state: CellState;
+  readonly limits: CellResourceLimits;
+  readonly trace: string;
+  readonly host: HostIdentity;
+}): string[] {
   const label = spec.mount.shared === true ? "z" : "Z";
   const options = [...(spec.mount.readOnly === true ? ["ro"] : []), label].join(",");
   // The state is the cell's alone (private label); the gitlink stand-in is every cell's (shared label).
@@ -870,7 +870,7 @@ export class PodmanSubstrate {
     this.starting.add(name);
     try {
       const state = await this.prepareState(parsed.data.instance, name, hostPath, gitEntry);
-      const args = buildRunArgs(parsed.data, name, hostPath, state, this.limits, trace.data, this.host);
+      const args = buildRunArgs({ spec: parsed.data, name, hostPath, state, limits: this.limits, trace: trace.data, host: this.host });
       let result: ProcessResult;
       try {
         result = await this.run(args);

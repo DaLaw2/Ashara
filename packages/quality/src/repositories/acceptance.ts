@@ -42,13 +42,17 @@ interface RecordedScaffold {
   readonly mergeCommit: string | null;
 }
 
-interface ReadyProjectRow {
+/** A project ready for its acceptance sweep, as the acceptance store lists it. */
+export interface ReadyProject {
   readonly projectId: ProjectId;
   /** null when no workspace was ever minted: nothing can be swept, and the caller says so. */
   readonly workspacePath: string | null;
   /** The project's Completed goal tasks (isGoalTask), oldest completion first. */
   readonly goalTaskIds: readonly string[];
-  /** The project's Completed product scaffolds with their recorded merges, oldest completion first. */
+  /**
+   * The project's Completed product scaffolds with their recorded merges, oldest completion first:
+   * the public interface file main must have moved on from.
+   */
   readonly scaffoldMerges: readonly RecordedScaffold[];
 }
 
@@ -56,7 +60,7 @@ interface ReadyProjectRow {
  * The projects ready for their acceptance sweep, oldest first. Each project is read on its own
  * (readEach), so one whose rows do not read is its UnreadSubject.
  */
-export async function listProjectsReadyForAcceptance(db: DbHandle): Promise<Array<ReadyProjectRow | UnreadSubject>> {
+export async function listProjectsReadyForAcceptance(db: DbHandle): Promise<Array<ReadyProject | UnreadSubject>> {
   const rows = await db
     .select({ id: projects.id, workspacePath: projects.workspacePath })
     .from(projects)
@@ -68,7 +72,7 @@ export async function listProjectsReadyForAcceptance(db: DbHandle): Promise<Arra
       const projectId = parseProjectId(row.id, "projects.id");
       return { id: projectId, projectId };
     },
-    async (row): Promise<ReadyProjectRow> => {
+    async (row): Promise<ReadyProject> => {
       const goals = await completedGoalTasks(db, row.id);
       return {
         projectId: parseProjectId(row.id, "projects.id"),
@@ -81,7 +85,7 @@ export async function listProjectsReadyForAcceptance(db: DbHandle): Promise<Arra
 }
 
 /** What one sweep recorded, whatever its verdict. */
-interface AcceptanceSweepRecord {
+export interface AcceptanceSweepRecord {
   readonly projectId: ProjectId;
   /** null only on a sweep that faulted before main could be read (never a passed one). */
   readonly mainCommit: string | null;
@@ -93,6 +97,15 @@ interface AcceptanceSweepRecord {
   readonly checkOutcomes: readonly SweptCheck[];
   readonly details: string;
 }
+
+/** What a terminal sweep is run for: the client's consumed stop, or a halt episode (project_blocks). */
+export type SweptTerminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };
+
+/** A failed sweep's record: the stored checks it ran and saw fail, none when it ran none. */
+export type FailedSweepRecord = AcceptanceSweepRecord & { readonly failedChecks: readonly FailedCheck[] };
+
+/** What one terminal sweep recorded, whether or not it ran on a commit. */
+export type TerminalSweepRecord = AcceptanceSweepRecord & { readonly terminal: SweptTerminal };
 
 /**
  * The guarantees of the project's vision version in force, in its order, as Engagement's vision
@@ -353,7 +366,7 @@ export async function recordAcceptance(
  */
 export async function recordAcceptanceDefect(
   db: Database,
-  sweep: AcceptanceSweepRecord & { readonly failedChecks: readonly FailedCheck[] },
+  sweep: FailedSweepRecord,
   writeDefect: (tx: DbTransaction) => Promise<string>,
   readGuarantees: ReadGuarantees,
 ): Promise<"recorded" | "moved"> {
@@ -386,15 +399,12 @@ async function workspacePaths(db: DbHandle, projectIds: readonly string[]): Prom
   };
 }
 
-/** What a terminal sweep is run for: the client's consumed stop, or a halt episode (project_blocks). */
-type Terminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };
-
 /** A project at a terminal short of acceptance with no terminal sweep recorded for it yet. */
-interface DueTerminalSweepRow {
+export interface DueTerminalSweep {
   readonly projectId: ProjectId;
   /** null when no workspace was ever minted: main holds nothing of the project's to sweep. */
   readonly workspacePath: string | null;
-  readonly terminal: Terminal;
+  readonly terminal: SweptTerminal;
 }
 
 /**
@@ -406,11 +416,11 @@ interface DueTerminalSweepRow {
  * terminals and their projects are read in one snapshot: a project deleted between two separate
  * reads would leave a terminal naming a project no row holds.
  */
-export async function listDueTerminalSweeps(db: Database): Promise<DueTerminalSweepRow[]> {
+export async function listDueTerminalSweeps(db: Database): Promise<DueTerminalSweep[]> {
   return db.transaction((tx) => dueTerminalSweepsIn(tx), { isolationLevel: "repeatable read", accessMode: "read only" });
 }
 
-async function dueTerminalSweepsIn(db: DbTransaction): Promise<DueTerminalSweepRow[]> {
+async function dueTerminalSweepsIn(db: DbTransaction): Promise<DueTerminalSweep[]> {
   const stopped = await stopsThatStopped(db, (stop) => sql`NOT EXISTS (SELECT 1 FROM acceptance_sweeps s WHERE s.stop_id = ${stop.id})`);
   const open = await haltEpisodesWhere(
     db,
@@ -440,7 +450,7 @@ async function dueTerminalSweepsIn(db: DbTransaction): Promise<DueTerminalSweepR
 class TerminalSweepFaultUncounted extends Error {
   constructor(
     readonly projectId: ProjectId,
-    readonly terminal: Terminal,
+    readonly terminal: SweptTerminal,
   ) {
     super(
       `cannot count a terminal sweep fault of ${terminal.kind === "stop" ? `stop ${terminal.stopId}` : `halt ${terminal.blockId}`} on project ${projectId}: ` +
@@ -454,7 +464,7 @@ class TerminalSweepFaultUncounted extends Error {
  * Counts one terminal sweep of `terminal` that could not run (terminal_sweep_faults), durably, and
  * returns the count with it: the bound on its retries outlives a restart.
  */
-export async function recordTerminalSweepFault(db: DbHandle, projectId: ProjectId, terminal: Terminal): Promise<number> {
+export async function recordTerminalSweepFault(db: DbHandle, projectId: ProjectId, terminal: SweptTerminal): Promise<number> {
   const of = terminal.kind === "stop" ? { stopId: terminal.stopId } : { blockId: terminal.blockId };
   const target = terminal.kind === "stop" ? terminalSweepFaults.stopId : terminalSweepFaults.blockId;
   const [row] = await db
@@ -473,7 +483,7 @@ export async function recordTerminalSweepFault(db: DbHandle, projectId: ProjectI
  */
 export async function recordTerminalSweep(
   db: Database,
-  sweep: AcceptanceSweepRecord & { readonly terminal: Terminal },
+  sweep: TerminalSweepRecord,
   readGuarantees: ReadGuarantees,
 ): Promise<"recorded" | "already-recorded"> {
   return db.transaction(async (tx) => {
@@ -490,7 +500,7 @@ export async function recordTerminalSweep(
  */
 export async function recordTerminalSweepWithoutEvidence(
   db: DbHandle,
-  sweep: Omit<AcceptanceSweepRecord, "checkOutcomes"> & { readonly terminal: Terminal },
+  sweep: Omit<TerminalSweepRecord, "checkOutcomes">,
 ): Promise<"recorded" | "already-recorded"> {
   const of = sweep.terminal.kind === "stop" ? { stopId: sweep.terminal.stopId } : { blockId: sweep.terminal.blockId };
   const sweepId = await insertSweepWithEvidence(

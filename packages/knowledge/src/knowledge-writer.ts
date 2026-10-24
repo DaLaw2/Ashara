@@ -1,14 +1,17 @@
 import type { ProjectId } from "@ashara/shared";
 
+/** A task's finding, kept for later briefs of its project and Epic. */
+interface KnowledgeFinding {
+  readonly projectId: ProjectId;
+  readonly taskId: string;
+  readonly epicId: string | null;
+  readonly title: string;
+  readonly content: string;
+  readonly tags: readonly string[];
+}
+
 export interface KnowledgeSink {
-  storeFinding(
-    projectId: ProjectId,
-    taskId: string,
-    epicId: string | null,
-    title: string,
-    content: string,
-    tags: string[],
-  ): Promise<void>;
+  storeFinding(finding: KnowledgeFinding): Promise<void>;
 }
 
 /**
@@ -93,10 +96,14 @@ export async function storeFailureKnowledge(
   const title = `${task.title} — ${result.status}`.slice(0, 100);
   const content = `Task '${task.title}' ${result.status} on attempt ${result.attempt}: ${result.detail}`;
   try {
-    await knowledgeSink.storeFinding(task.projectId, task.id, task.epicId, title, content, [
-      "task-failure",
-      `outcome:${result.status}`,
-    ]);
+    await knowledgeSink.storeFinding({
+      projectId: task.projectId,
+      taskId: task.id,
+      epicId: task.epicId,
+      title,
+      content,
+      tags: ["task-failure", `outcome:${result.status}`],
+    });
   } catch (e) {
     // eslint-disable-next-line ashara/catch-continue -- best effort: a failure finding is context for later briefs; the dispatch's result is already decided and returned, and no verdict, counter or charge reads it
     console.warn(`[${task.id}] failed to store failure knowledge:`, e);

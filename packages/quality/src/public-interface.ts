@@ -29,10 +29,17 @@ export type InterfaceStanding =
 
 type ComparedStanding = Exclude<InterfaceStanding, { readonly kind: "not-compared" }>;
 
-/** A commit handed to the comparison that is not a commit id: it is never handed to git. */
+/** A commit that is not a commit id: it is never handed to git. `source` names where the value came from. */
 class InterfaceCommitInvalid extends Error {
-  constructor(readonly commit: string) {
-    super(`${JSON.stringify(commit)} is not a commit id; ${PUBLIC_INTERFACE_FILE} is not read at it`);
+  constructor(
+    readonly commit: string,
+    readonly source: "recorded" | "compared",
+  ) {
+    super(
+      source === "recorded"
+        ? `the recorded commit ${JSON.stringify(commit)} (a suite's baseline or a delivered main, read back from the database) is not a commit id; ${PUBLIC_INTERFACE_FILE} is not read at it`
+        : `the commit ${JSON.stringify(commit)} handed to the interface comparison is not a commit id; ${PUBLIC_INTERFACE_FILE} is not read at it`,
+    );
     this.name = "InterfaceCommitInvalid";
   }
 }
@@ -62,7 +69,7 @@ export interface PublicInterfaceReader {
 /** The target checkout's git: absent when the commit's tree holds no such file; any git failure throws. */
 export const gitPublicInterface: PublicInterfaceReader = {
   async at(targetProjectPath, commit) {
-    if (!COMMIT_ID.test(commit)) throw new InterfaceCommitInvalid(commit);
+    if (!COMMIT_ID.test(commit)) throw new InterfaceCommitInvalid(commit, "recorded");
     const repo = targetRepo(targetProjectPath);
     const { stdout: listed } = await runHostGit(repo, ["ls-tree", "--name-only", commit, "--", PUBLIC_INTERFACE_FILE]);
     if (listed.trim() === "") return { kind: "absent" };
@@ -73,7 +80,7 @@ export const gitPublicInterface: PublicInterfaceReader = {
 
 /** The blob id of the public interface file in `commit`'s tree, or null when that tree holds none. */
 async function interfaceBlobAt(targetProjectPath: string, commit: string): Promise<string | null> {
-  if (!COMMIT_ID.test(commit)) throw new InterfaceCommitInvalid(commit);
+  if (!COMMIT_ID.test(commit)) throw new InterfaceCommitInvalid(commit, "compared");
   const { stdout } = await runHostGit(targetRepo(targetProjectPath), ["ls-tree", commit, "--", PUBLIC_INTERFACE_FILE]);
   const listed = stdout.trim();
   if (listed === "") return null;

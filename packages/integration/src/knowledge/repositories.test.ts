@@ -80,14 +80,14 @@ describe("KnowledgeRepository", () => {
   });
 
   test("storeKnowledgeFinding inserts a finding and it can be read back", async () => {
-    await repo.storeKnowledgeFinding(
-      testProjectId,
+    await repo.storeKnowledgeFinding({
+      projectId: testProjectId,
       taskId,
       epicId,
-      "Test Finding Title",
-      "This is a test finding content for integration tests",
-      ["test", "integration"],
-    );
+      title: "Test Finding Title",
+      content: "This is a test finding content for integration tests",
+      tags: ["test", "integration"],
+    });
 
     const rows = await db
       .select()
@@ -140,14 +140,14 @@ describe("FailedApproachRepository", () => {
   });
 
   test("record inserts a failed approach and it can be read back", async () => {
-    await repo.record(
-      testProjectId,
+    await repo.record({
+      projectId: testProjectId,
       taskId,
       epicId,
-      "Bad Architecture Choice",
-      "Over-engineering, latency issues",
-      "Keep it simple for solo projects",
-    );
+      title: "Bad Architecture Choice",
+      reason: "Over-engineering, latency issues",
+      learned: "Keep it simple for solo projects",
+    });
     createdFailedApproachTaskIds.push(taskId);
 
     const rows = await db
@@ -205,8 +205,8 @@ describe("project-scoped knowledge", () => {
     const approaches = new FailedApproachRepository(db);
     for (const projectId of projectTasks.keys()) {
       const taskId = taskOf(projectId);
-      await knowledge.storeKnowledgeFinding(projectId, taskId, null, `finding of ${projectId}`, "shared words", []);
-      await approaches.record(projectId, taskId, null, `approach of ${projectId}`, "shared words", "l");
+      await knowledge.storeKnowledgeFinding({ projectId, taskId, epicId: null, title: `finding of ${projectId}`, content: "shared words", tags: [] });
+      await approaches.record({ projectId, taskId, epicId: null, title: `approach of ${projectId}`, reason: "shared words", learned: "l" });
     }
 
     for (const projectId of projectTasks.keys()) {

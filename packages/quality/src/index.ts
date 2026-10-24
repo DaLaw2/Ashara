@@ -100,4 +100,12 @@ export {
   recordTerminalSweepWithoutEvidence,
   readSweepOutcome,
 } from "./repositories/acceptance.js";
-export type { AcceptanceUncovered } from "./repositories/acceptance.js";
+export type {
+  AcceptanceSweepRecord,
+  AcceptanceUncovered,
+  DueTerminalSweep,
+  FailedSweepRecord,
+  ReadyProject,
+  SweptTerminal,
+  TerminalSweepRecord,
+} from "./repositories/acceptance.js";

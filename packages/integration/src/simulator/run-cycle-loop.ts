@@ -176,13 +176,20 @@ interface ChargeWindowStart {
   readonly decisions: number;
 }
 
-async function openChargeWindow(
-  db: Database,
-  projectIds: readonly string[],
-  scheduler: Scheduler,
-  tape: Tape,
-  consulted: Set<string>,
-): Promise<ChargeWindowStart> {
+/**
+ * Where a cycle's I10 counters are read from: the database, the run's fault schedule, its decision
+ * tape and the sites it consulted.
+ */
+interface ChargeSources {
+  readonly db: Database;
+  readonly projectIds: readonly string[];
+  readonly scheduler: Scheduler;
+  readonly tape: Tape;
+  readonly consulted: Set<string>;
+}
+
+async function openChargeWindow(sources: ChargeSources): Promise<ChargeWindowStart> {
+  const { db, projectIds, scheduler, tape, consulted } = sources;
   consulted.clear();
   return {
     before: await readCharges(db, projectIds),
@@ -195,11 +202,7 @@ async function openChargeWindow(
 async function closeChargeWindow(
   start: ChargeWindowStart,
   step: number,
-  db: Database,
-  projectIds: readonly string[],
-  scheduler: Scheduler,
-  tape: Tape,
-  consulted: ReadonlySet<string>,
+  { db, projectIds, scheduler, tape, consulted }: ChargeSources,
 ): Promise<Violation[]> {
   return checkCharges({
     step,
@@ -494,7 +497,14 @@ export class CycleLoop {
       const repeats = draws.tape.chance("wake.duplicated", FAULTS[options.profile].perSeamCall * 10) ? 2 : 1;
       // I4's receipt clause: every message on record now is answered by the time this cycle ends.
       const owedReceipts = new Set((await unansweredMessages(observer, projectIds)).map((message) => message.id));
-      const window = await openChargeWindow(observer, projectIds, world.scheduler, draws.tape, world.consulted);
+      const charges: ChargeSources = {
+        db: observer,
+        projectIds,
+        scheduler: world.scheduler,
+        tape: draws.tape,
+        consulted: world.consulted,
+      };
+      const window = await openChargeWindow(charges);
       const ran: CycleRun = { statuses: [], processed: 0 };
       let crashed = false;
       for (let r = 0; r < repeats && !crashed; r++) {
@@ -505,15 +515,7 @@ export class CycleLoop {
       // The runner's own wait between cycles (orchestrator runner.ts defaults), on the simulated clock.
       draws.clock.jump(ran.processed > 0 ? POLL_INTERVAL_MS : IDLE_INTERVAL_MS);
       await server.recover(current);
-      const charged = await closeChargeWindow(
-        window,
-        state.cycles,
-        observer,
-        projectIds,
-        world.scheduler,
-        draws.tape,
-        world.consulted,
-      );
+      const charged = await closeChargeWindow(window, state.cycles, charges);
       for (const violation of charged) state.report(violation);
 
       const snapshots = await this.judgeCycle(repeats, ran.statuses);

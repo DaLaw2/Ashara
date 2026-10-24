@@ -99,9 +99,6 @@ function citingPerLine<T extends { readonly acceptance: readonly ScriptedLine[] 
 /**
  * `plan` as an honest planner answers `prompt`: every item the prompt says a task must cite
  * that no line cites yet gets an acceptance line of its own that cites it alone.
- *
- * @testseam the integration planning tests' scripted planners answer through it, reading the prompt as the simulator's
- * planner does
  */
 export function citingItemsToCheck(plan: ScriptedPlan, prompt: string): ScriptedPlan {
   return {

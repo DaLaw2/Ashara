@@ -1178,7 +1178,10 @@ describe("gitPublicInterface", () => {
 
       expect(await gitPublicInterface.at(repo, scaffold)).toEqual({ kind: "present", text: "Run: kv put <key> <value>\n" });
       expect(await gitPublicInterface.at(repo, before)).toEqual({ kind: "absent" });
-      await expect(gitPublicInterface.at(repo, "--output=/tmp/x")).rejects.toMatchObject({ name: "InterfaceCommitInvalid" });
+      await expect(gitPublicInterface.at(repo, "--output=/tmp/x")).rejects.toMatchObject({
+        name: "InterfaceCommitInvalid",
+        message: expect.stringContaining('the recorded commit "--output=/tmp/x"'),
+      });
     } finally {
       await rm(repo, { recursive: true, force: true });
     }

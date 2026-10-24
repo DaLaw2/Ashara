@@ -106,7 +106,6 @@ interface HaltReportOutcome {
 /**
  * The reports a halt is told by over the projects `ours` admits: each halt's terminal message (its
  * terminal sweep recorded first), then each resumption's report, as the core loop runs them.
- * @testseam the integration tests that report halts outside the core loop; production runs both steps in the core loop
  */
 export function haltReportsOf(db: Db, ours: (projectId: string) => boolean, options: { readonly escapes?: boolean } = {}): { runPending(): Promise<HaltReportOutcome[]> } {
   const terminal = terminalReportsOf(db, ours, { kinds: ["halted"], ...options });

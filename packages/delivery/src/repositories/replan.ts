@@ -541,7 +541,8 @@ export async function recordReplanFailure(db: DbHandle, projectId: ProjectId, er
   });
 }
 
-interface DuePlanRevisionRow {
+/** A revision of the plan the client has not been told about. */
+export interface DuePlanRevision {
   readonly revisionId: string;
   readonly projectId: ProjectId;
   readonly revision: number;
@@ -560,7 +561,7 @@ interface DuePlanRevisionRow {
  * that report describes it (listDuePlanReports), so the client never reads a revision of a plan it
  * was not told about. A revision whose row does not read is its UnreadSubject (readEach).
  */
-export async function listDuePlanRevisionReports(db: DbHandle): Promise<Array<DuePlanRevisionRow | UnreadSubject>> {
+export async function listDuePlanRevisionReports(db: DbHandle): Promise<Array<DuePlanRevision | UnreadSubject>> {
   const rows = await db
     .select({
       id: planRevisions.id,
@@ -593,6 +594,13 @@ export async function listDuePlanRevisionReports(db: DbHandle): Promise<Array<Du
   );
 }
 
+/** A plan revision as its report is posted: its project and the client message whose correction it took in (null for a repair). */
+export interface PlanRevisionToTell {
+  readonly revisionId: string;
+  readonly projectId: string;
+  readonly requestedBy: string | null;
+}
+
 /** A report was asked to be posted for a plan revision that does not exist. */
 class PlanRevisionNotFound extends Error {
   constructor(readonly revisionId: string) {
@@ -609,7 +617,7 @@ class PlanRevisionNotFound extends Error {
 export async function planRevisionToTell(
   db: DbHandle,
   revisionId: string,
-): Promise<{ readonly revisionId: string; readonly projectId: string; readonly requestedBy: string | null }> {
+): Promise<PlanRevisionToTell> {
   const [revision] = await db
     .select({ projectId: planRevisions.projectId, requestedBy: planRevisions.requestedBy })
     .from(planRevisions)
