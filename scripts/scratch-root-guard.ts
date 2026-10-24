@@ -17,7 +17,7 @@ export function pinTmpdirToScratchRoot(env: Record<string, string | undefined>, 
   return previous;
 }
 
-/** @testseam vitest.config.ts names this file as globalSetup, a reference knip does not read */
+/** @testseam vitest.config.mts names this file as globalSetup, a reference knip does not read */
 export default function setup(): void {
   const root = resolveScratchRoot();
   const replaced = pinTmpdirToScratchRoot(process.env, root);

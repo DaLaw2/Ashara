@@ -14,6 +14,8 @@ function stubSources(over: Partial<SelectionSources> = {}): SelectionSources {
     testsImporting: () => Promise.resolve(["packages/a/src/a.test.ts"]),
     filesNaming: () => [],
     testsImportingDirectly: () => Promise.resolve([]),
+    files: [],
+    readRevision: () => undefined,
     ...over,
   };
 }
@@ -31,7 +33,7 @@ describe("the whole-suite rules", () => {
     "package.json",
     "packages/shared/package.json",
     "package-lock.json",
-    "vitest.config.ts",
+    "vitest.config.mts",
     "packages/integration/src/cell-leak-guard.ts",
     "packages/integration/src/podman-test-load.ts",
     "config/models.toml",
@@ -153,9 +155,130 @@ describe("the cap", () => {
   });
 });
 
+describe("a dependency change", () => {
+  // Three workspaces: a resolves hono, b resolves a through its link, c resolves neither; the root
+  // project resolves zod and vitest. scripts/ holds the root project's tests.
+  const TESTS = {
+    a: ["packages/a/src/a1.test.ts", "packages/a/src/a2.test.ts"],
+    b: ["packages/b/src/b1.test.ts", "packages/b/src/b2.test.ts"],
+    c: ["packages/c/src/c1.test.ts", "packages/c/src/c2.test.ts"],
+    root: ["scripts/s1.test.ts", "scripts/s2.test.ts"],
+  };
+  const ALL = [...TESTS.a, ...TESTS.b, ...TESTS.c, ...TESTS.root].sort();
+  const A_MODULE = "packages/a/src/server.ts";
+  const HONO_IMPORTER = "packages/c/src/undeclared.ts";
+  const IMPORTS_A = "scripts/s1.test.ts";
+  const IMPORTS_HONO = "packages/c/src/c1.test.ts";
+
+  const lockfile = (honoVersion: string, extra: Record<string, unknown> = {}): string =>
+    JSON.stringify({
+      name: "probe",
+      lockfileVersion: 3,
+      packages: {
+        "": { name: "probe", workspaces: ["packages/*"], devDependencies: { vitest: "4.0.0", zod: "4.0.0" } },
+        "node_modules/vitest": { version: "4.0.0" },
+        "node_modules/zod": { version: "4.0.0" },
+        "node_modules/hono": { version: honoVersion, dependencies: { tiny: "1.0.0" } },
+        "node_modules/hono/node_modules/tiny": { version: "1.0.0" },
+        "node_modules/@p/a": { resolved: "packages/a", link: true },
+        "node_modules/@p/b": { resolved: "packages/b", link: true },
+        "node_modules/@p/c": { resolved: "packages/c", link: true },
+        "packages/a": { name: "@p/a", dependencies: { hono: honoVersion } },
+        "packages/b": { name: "@p/b", dependencies: { "@p/a": "*" } },
+        "packages/c": { name: "@p/c" },
+        ...extra,
+      },
+    });
+
+  const sources = (base: string | undefined, head: string | undefined): SelectionSources =>
+    stubSources({
+      allTests: ALL,
+      files: [...ALL, A_MODULE, HONO_IMPORTER, "packages/c/src/plain.ts", "package.json", "package-lock.json"],
+      readRevision: (file, side) => (file === "package-lock.json" ? (side === "base" ? base : head) : undefined),
+      filesNaming: (name) => (name === '"hono"' ? [HONO_IMPORTER] : name === '"@p/a"' ? ["packages/b/src/uses-a.ts"] : []),
+      testsImporting: (modules) =>
+        Promise.resolve([...(modules.includes(A_MODULE) ? [IMPORTS_A] : []), ...(modules.includes(HONO_IMPORTER) ? [IMPORTS_HONO] : [])]),
+    });
+
+  const upgrade = [modified("packages/a/package.json"), modified("package-lock.json")];
+
+  test("a hono upgrade in a workspace manifest and the lockfile selects every test of each workspace that resolves it, and the tests that reach them", async () => {
+    const selection = await selectTests(upgrade, sources(lockfile("4.0.0"), lockfile("4.1.0")));
+    if (selection.kind !== "selected") throw new Error(`expected a selection, got the whole suite: ${selection.reasons.join("; ")}`);
+    const expected = [...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort();
+    expect(selection.tests).toEqual(expected);
+    expect(selection.required).toEqual(expected);
+    expect(selection.tests).not.toContain("packages/c/src/c2.test.ts");
+    expect(selection.tests).not.toContain("scripts/s2.test.ts");
+  });
+
+  test("the cap never trims a dependency change's tests", async () => {
+    const selection = await selectTests([modified("packages/c/src/plain.ts"), ...upgrade], sources(lockfile("4.0.0"), lockfile("4.1.0")));
+    const run = boundSelection(selection, ALL.length, { maxTests: 1 });
+    if (run.kind !== "tests") throw new Error(`expected a test run, got ${run.kind}`);
+    expect(run.tests).toEqual([...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort());
+    expect(run.notice).toContain("every test file of the changed dependencies");
+  });
+
+  // One path per capped whole-suite rule; a capped rule added without a path here fails the check below.
+  const CAPPED_PATHS = ["migrations/zzzz_probe.sql", "boundary-rules.toml", "eslint.config.mjs", "tsconfig.json", "packages/integration/src/cell-leak-guard.ts", "packages/integration/src/podman-test-load.ts", "config/probe.toml"];
+
+  test("every capped whole-suite rule has a probe path", () => {
+    for (const rule of WHOLE_SUITE_RULES.filter((r) => r.capped)) expect(CAPPED_PATHS.some((f) => rule.pattern.test(f)), rule.pattern.source).toBe(true);
+  });
+
+  test.each(CAPPED_PATHS)("a capped whole-suite path (%s) in the same change never trims a dependency change's tests", async (file) => {
+    const head = lockfile("4.0.0", { "node_modules/hono": { version: "4.0.0-probe", dependencies: { tiny: "1.0.0" } } });
+    const selection = await selectTests([modified("package-lock.json"), modified(file)], sources(lockfile("4.0.0"), head));
+    expect(selection).toMatchObject({ kind: "whole-suite", capped: true });
+    expect(selection.reasons.join("\n")).toMatch(/^package-lock\.json: /m);
+    const run = boundSelection(selection, ALL.length, { maxTests: 1 });
+    if (run.kind !== "tests") throw new Error(`expected a test run, got ${run.kind}`);
+    expect(run.tests).toEqual([...TESTS.a, ...TESTS.b, IMPORTS_A, IMPORTS_HONO].sort());
+    expect(run.notice).toContain("every test file of the changed dependencies");
+  });
+
+  test("a nested copy resolves to the workspaces that resolve its parent", async () => {
+    const base = lockfile("4.0.0");
+    const head = lockfile("4.0.0", { "node_modules/hono/node_modules/tiny": { version: "1.0.1" } });
+    const selection = await selectTests([modified("package-lock.json")], sources(base, head));
+    expect(selection).toMatchObject({ kind: "selected", required: [...TESTS.a, ...TESTS.b, IMPORTS_A].sort() });
+  });
+
+  test.each([
+    ["an entry the root project resolves", lockfile("4.0.0"), lockfile("4.0.0", { "node_modules/zod": { version: "4.1.0" } }), /root project resolves node_modules\/zod/],
+    ["an entry no workspace resolves", lockfile("4.0.0"), lockfile("4.0.0", { "node_modules/orphan": { version: "1.0.0" } }), /no workspace resolves node_modules\/orphan/],
+    ["a lockfile absent at the base", undefined, lockfile("4.0.0"), /absent at the base/],
+    ["a file that differs with no entry differing", lockfile("4.0.0"), lockfile("4.0.0"), /no locked entry does/],
+  ])("%s selects the whole suite, which the cap never trims", async (_name, base, head, reason) => {
+    const selection = await selectTests([modified("package-lock.json")], sources(base, head));
+    expect(selection).toMatchObject({ kind: "whole-suite", capped: false });
+    expect(selection.reasons.join("\n")).toMatch(reason);
+    expect(boundSelection(selection, ALL.length, { maxTests: 1 })).toEqual({ kind: "whole-suite", count: ALL.length });
+  });
+
+  test("the root manifest and the vitest config select the whole suite past the cap; a migration's whole suite stays capped", async () => {
+    for (const file of ["package.json", "vitest.config.mts"]) {
+      const selection = await selectTests([modified(file)], sources(lockfile("4.0.0"), lockfile("4.0.0")));
+      expect(boundSelection(selection, ALL.length, { maxTests: 1 }), file).toEqual({ kind: "whole-suite", count: ALL.length });
+    }
+    const migration = await selectTests([modified("migrations/added.sql")], sources(lockfile("4.0.0"), lockfile("4.0.0")));
+    expect(boundSelection(migration, ALL.length, { maxTests: 1 })).toMatchObject({ kind: "nothing", exitCode: 1 });
+  });
+
+  test("a manifest outside the workspaces the lockfile records selects the whole suite", async () => {
+    const selection = await selectTests([modified("packages/z/package.json")], sources(lockfile("4.0.0"), lockfile("4.0.0")));
+    expect(selection).toMatchObject({ kind: "whole-suite", capped: false });
+  });
+
+  test("a lockfile not of the npm shape fails the selection", async () => {
+    await expect(selectTests([modified("package-lock.json")], sources(lockfile("4.0.0"), '{"packages": []}'))).rejects.toThrow(/package-lock\.json at the head/);
+  });
+});
+
 describe("this repository's graph", () => {
   test("the direct importers are the tests whose own specifiers resolve to the module", async () => {
-    const sources = await repositorySources(REPO);
+    const sources = await repositorySources(REPO, { base: "HEAD", head: "HEAD" });
     try {
       const tests = await sources.testsImportingDirectly(["packages/shared/src/json.ts"]);
       expect(tests).toContain("packages/shared/src/json.test.ts");
@@ -167,7 +290,7 @@ describe("this repository's graph", () => {
 
 
   test("a shared kernel module selects tests in other packages that reach it only through other modules", async () => {
-    const sources = await repositorySources(REPO);
+    const sources = await repositorySources(REPO, { base: "HEAD", head: "HEAD" });
     try {
       const tests = await sources.testsImporting(["packages/shared/src/json.ts"]);
       expect(tests).toContain("packages/shared/src/json.test.ts");
@@ -227,6 +350,18 @@ describe("a planted break in a scratch repository", () => {
     await write("packages/other/src/other.test.ts", 'import { expect, test } from "vitest";\ntest("stands alone", () => {\n  expect(1).toBe(1);\n});\n');
     await mkdir(path.join(dir, "node_modules", "@probe"), { recursive: true });
     await symlink(path.join(dir, "packages", "leaf"), path.join(dir, "node_modules", "@probe", "leaf"));
+    await write(
+      "package-lock.json",
+      JSON.stringify({
+        name: "probe",
+        lockfileVersion: 3,
+        packages: {
+          "": { name: "probe", workspaces: ["packages/*"] },
+          "node_modules/@probe/leaf": { resolved: "packages/leaf", link: true },
+          "packages/leaf": { name: "@probe/leaf" },
+        },
+      }),
+    );
     await write(".gitignore", "node_modules/\n");
     git("init", "-q", "-b", "main");
     git("add", "-A");
@@ -255,12 +390,23 @@ describe("a planted break in a scratch repository", () => {
     expect(run.code, run.output).not.toBeNull();
   });
 
-  test("a package manifest change fires the whole-suite rule", async () => {
+  test("a workspace manifest change selects the tests that reach the workspace, and not the others", async () => {
     await write("packages/leaf/src/double.ts", LEAF);
     await write("packages/leaf/package.json", JSON.stringify({ name: "@probe/leaf", type: "module", version: "0.0.1", exports: { ".": "./src/index.ts" } }));
-    const run = await runCli("main", "--list");
+    const run = await runCli("main", "--list", "--cap", "1");
+    expect(run.output).toContain("packages/leaf/package.json: the manifest of workspace packages/leaf");
+    expect(run.output).toContain("selected: 1 of 2 test files");
+    expect(run.output).toMatch(/^ {2}packages\/top\/src\/top\.test\.ts$/m);
+    expect(run.output).not.toMatch(/^ {2}packages\/other\/src\/other\.test\.ts$/m);
+    expect(run.code, run.output).toBe(0);
+  });
+
+  test("the root manifest selects the whole suite, past a cap of one", async () => {
+    await write("packages/leaf/package.json", JSON.stringify({ name: "@probe/leaf", type: "module", exports: { ".": "./src/index.ts" } }));
+    await write("package.json", JSON.stringify({ name: "probe", private: true, workspaces: ["packages/*"] }));
+    const run = await runCli("main", "--list", "--cap", "1");
     expect(run.output).toContain("selected: the whole suite (2 test files)");
-    expect(run.output).toContain("packages/leaf/package.json");
+    expect(run.output).not.toContain("selection capped");
     expect(run.code, run.output).toBe(0);
   });
 });

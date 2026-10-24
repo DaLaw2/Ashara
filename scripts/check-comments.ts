@@ -7,9 +7,9 @@
  * code, never the reverse.
  *
  * What is read, over every file `git ls-files` lists outside COMMENT_LINT_EXCLUDES:
- * - .ts, .mjs and .js files: every comment, found by the TypeScript parser so a `//` inside a string,
- *   template or regular expression is never taken for one, and the title of every `it`, `test`,
- *   `describe` and `suite` call (including `.each`, `.skip`, `.skipIf(...)` and the like), since a
+ * - .ts, .mts, .cts, .mjs, .cjs and .js files: every comment, found by the TypeScript parser so a
+ *   `//` inside a string, template or regular expression is never taken for one, and the title of
+ *   every `it`, `test`, `describe` and `suite` call (including `.each`, `.skip`, `.skipIf(...)` and the like), since a
  *   test title is read as prose about the code just as a comment is.
  * - justfile, .github/workflows, docker/, *.toml, config/env.example and .gitignore: every `#`
  *   comment that starts a line or follows whitespace outside a quoted string.
@@ -151,11 +151,11 @@ function splitLines(text: string, firstLine: number): CommentLine[] {
 }
 
 function isScript(relPath: string): boolean {
-  return /\.(?:ts|mjs|js)$/.test(relPath);
+  return /\.(?:[cm]?ts|[cm]?js)$/.test(relPath);
 }
 
 function parseScript(relPath: string, content: string): ts.SourceFile {
-  const kind = relPath.endsWith(".ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+  const kind = /\.[cm]?ts$/.test(relPath) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
   return ts.createSourceFile(relPath, content, ts.ScriptTarget.Latest, true, kind);
 }
 

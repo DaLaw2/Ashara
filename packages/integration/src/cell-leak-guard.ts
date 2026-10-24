@@ -33,9 +33,9 @@ const TEARDOWN_SHARE = 0.8;
 
 /**
  * What the guard's podman work needs at worst, at a run's end or on a signal: one listing and one
- * removal, each bounded by PODMAN_TIMEOUT_MS. vitest.config.ts's teardownTimeout gives the end-of-run
+ * removal, each bounded by PODMAN_TIMEOUT_MS. vitest.config.mts's teardownTimeout gives the end-of-run
  * check at least this through TEARDOWN_SHARE, and `just test` waits at least this before its SIGKILL.
- * @testseam cell-leak-guard.test.ts checks vitest.config.ts and the justfile against it, podman-test-load.test.ts its per-call bound; the guard's own calls read PODMAN_TIMEOUT_MS
+ * @testseam cell-leak-guard.test.ts checks vitest.config.mts and the justfile against it, podman-test-load.test.ts its per-call bound; the guard's own calls read PODMAN_TIMEOUT_MS
  */
 export const GUARD_PODMAN_BUDGET = { teardownShare: TEARDOWN_SHARE, podmanTimeoutMs: PODMAN_TIMEOUT_MS, worstCaseMs: 2 * PODMAN_TIMEOUT_MS } as const;
 
@@ -224,7 +224,7 @@ function armSignalTeardown(cellRun: string): () => void {
   };
 }
 
-/** @testseam vitest.config.ts names this file as globalSetup, a reference knip does not read */
+/** @testseam vitest.config.mts names this file as globalSetup, a reference knip does not read */
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
   const cellRun = `${process.pid}x${randomBytes(4).toString("hex")}`;
   await reapDeadRuns();
@@ -236,8 +236,8 @@ export default async function setup(project: TestProject): Promise<() => Promise
       // vitest's close() logs an error thrown here without setting the exit code, so the code is set
       // here, before podman is asked, and restored only once the run is shown to have left nothing.
       // `vitest run` awaits this teardown with no timer armed; Vitest.exit() arms teardownTimeout
-      // first and on firing calls process.exit() with whatever code is set (vitest 4.1.10,
-      // cli-api close() and exit()). Every podman call here is bounded to end before that timeout.
+      // first and on firing calls process.exit() with whatever code is set (vitest's cli-api close()
+      // and exit()). Every podman call here is bounded to end before that timeout.
       const verdictBefore = process.exitCode;
       process.exitCode = 1;
       const deadline = Date.now() + teardownTimeoutMs * TEARDOWN_SHARE;

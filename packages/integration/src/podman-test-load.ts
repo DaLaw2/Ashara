@@ -9,7 +9,7 @@
 /**
  * The test files that start real podman work: every *.podman.test.ts and every test that constructs
  * a PodmanSubstrate on the podman binary.
- * @testseam vitest.config.ts includes them in the podman project; podman-test-load.test.ts checks the tree against it
+ * @testseam vitest.config.mts includes them in the podman project; podman-test-load.test.ts checks the tree against it
  */
 export const PODMAN_TEST_FILES = [
   "packages/*/src/**/*.podman.test.ts",
@@ -30,7 +30,7 @@ export const PODMAN_TEST_FILES = [
 /**
  * Podman test files that run at once, whatever --maxWorkers the run is given; the p95s below were
  * measured with this bound.
- * @testseam vitest.config.ts sets it on the podman project
+ * @testseam vitest.config.mts sets it on the podman project
  */
 export const PODMAN_MAX_WORKERS = 4;
 
@@ -59,12 +59,12 @@ export const MEASURED_P95_MS = {
 
 /**
  * A podman project test's timeout.
- * @testseam vitest.config.ts sets it on the podman project
+ * @testseam vitest.config.mts sets it on the podman project
  */
 export const PODMAN_TEST_TIMEOUT_MS = TIMEOUT_MULTIPLE * MEASURED_P95_MS.slowestTest;
 /**
  * A podman project hook's timeout.
- * @testseam vitest.config.ts sets it on the podman project
+ * @testseam vitest.config.mts sets it on the podman project
  */
 export const PODMAN_HOOK_TIMEOUT_MS = TIMEOUT_MULTIPLE * MEASURED_P95_MS.slowestHook;
 /** Each podman call of the cell-leak guard and of the test-images guard. */

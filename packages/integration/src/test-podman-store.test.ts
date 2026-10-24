@@ -48,10 +48,10 @@ describe("the test podman stores", () => {
 });
 
 describe("the test stores' wiring", () => {
-  // Every runner reaches the store through vitest.config.ts: `just test`, `just test-affected`
+  // Every runner reaches the store through vitest.config.mts: `just test`, `just test-affected`
   // (scripts/affected-tests.ts spawns vitest on it) and a direct `npx vitest`.
-  it("vitest.config.ts selects the test store before any globalSetup and names the store guard among them", () => {
-    const config = readFileSync(fileURLToPath(new URL("../../../vitest.config.ts", import.meta.url)), "utf8");
+  it("vitest.config.mts selects the test store before any globalSetup and names the store guard among them", () => {
+    const config = readFileSync(fileURLToPath(new URL("../../../vitest.config.mts", import.meta.url)), "utf8");
     expect(config).toMatch(/^useTestPodmanStore\(\);$/m);
     const list = /^\s*globalSetup:\s*\[([^\]]*)\]/m.exec(config)?.[1];
     expect(list).toContain('"packages/integration/src/test-podman-store-guard.ts"');

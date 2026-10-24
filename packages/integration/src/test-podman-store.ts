@@ -26,7 +26,7 @@ export const TEST_IMAGES_CONF = fileURLToPath(new URL("../../../config/podman-te
  * Points every podman this process and its children start at the test run store, on a host with
  * /data; podman's default store otherwise. The test runner's config calls it, so every test run does,
  * however it is started.
- * @testseam vitest.config.ts calls it, a reference knip does not read
+ * @testseam vitest.config.mts calls it, a reference knip does not read
  */
 export function useTestPodmanStore(): void {
   if (existsSync(HDD_ROOT)) process.env.CONTAINERS_STORAGE_CONF = TEST_STORAGE_CONF;

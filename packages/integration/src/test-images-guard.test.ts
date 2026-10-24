@@ -133,10 +133,10 @@ describe("the pinned test image guard", () => {
 });
 
 describe("the guard's wiring", () => {
-  test("vitest.config.ts names the guard as its first globalSetup", async () => {
-    const config = await readFile(path.join(ROOT, "vitest.config.ts"), "utf8");
+  test("vitest.config.mts names the guard as its first globalSetup", async () => {
+    const config = await readFile(path.join(ROOT, "vitest.config.mts"), "utf8");
     const list = /^\s*globalSetup:\s*\[([^\]]*)\]/m.exec(config)?.[1];
-    if (list === undefined) return expect.unreachable("vitest.config.ts sets no globalSetup");
+    if (list === undefined) return expect.unreachable("vitest.config.mts sets no globalSetup");
     expect(list.trim()).toMatch(/^"packages\/integration\/src\/test-images-guard\.ts"/);
   });
 

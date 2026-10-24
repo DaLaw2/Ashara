@@ -186,6 +186,10 @@ describe("non-script files", () => {
     expect(classesIn("seed/x.sql", `SELECT 1; -- added by ${MIGRATION} 048\n`)).toEqual(["migration number"]);
     expect(extractCommentLines("package.json", '{"note": "ADR-074"}')).toEqual([]);
   });
+
+  test.each(["vitest.config.mts", "a.cts", "a.cjs"])("the comments of a %s file are read as a script's", (file) => {
+    expect(extractCommentLines(file, "// one\nexport const a = 1;\n")).toEqual([{ line: 1, text: "// one" }]);
+  });
 });
 
 describe("the exclude list", () => {

@@ -83,7 +83,7 @@ async function checkTestPodmanStore(): Promise<void> {
   if (detail !== null) throw new TestPodmanStoreMisplaced(store.graphRoot, detail);
 }
 
-/** @testseam vitest.config.ts names this file as globalSetup, a reference knip does not read */
+/** @testseam vitest.config.mts names this file as globalSetup, a reference knip does not read */
 export default async function setup(): Promise<void> {
   await checkTestPodmanStore();
 }

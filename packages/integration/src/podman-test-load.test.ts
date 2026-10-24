@@ -17,7 +17,7 @@ import {
   podmanTimeoutDetail,
 } from "./podman-test-load.js";
 
-// vitest.config.ts as vitest resolves it for the full suite's own command line: the podman files
+// vitest.config.mts as vitest resolves it for the full suite's own command line: the podman files
 // land in a project of their own whose worker bound a run's --maxWorkers does not replace, and
 // every podman timeout is the stated multiple of its measured p95.
 
@@ -75,7 +75,7 @@ describe("the podman project", () => {
 
   test("runs at most PODMAN_MAX_WORKERS files at once under the lane's --maxWorkers, in a group of its own", () => {
     const podman = vitest.projects.find((p) => p.name === "podman");
-    if (podman === undefined) return expect.unreachable("vitest.config.ts defines no podman project");
+    if (podman === undefined) return expect.unreachable("vitest.config.mts defines no podman project");
     expect(vitest.config.maxWorkers).toBe(LANE_MAX_WORKERS);
     expect(PODMAN_MAX_WORKERS).toBeLessThan(LANE_MAX_WORKERS);
     expect(podman.config.maxWorkers).toBe(PODMAN_MAX_WORKERS);
@@ -86,7 +86,7 @@ describe("the podman project", () => {
 
   test("times its tests and hooks out at TIMEOUT_MULTIPLE times their measured p95", () => {
     const podman = vitest.projects.find((p) => p.name === "podman");
-    if (podman === undefined) return expect.unreachable("vitest.config.ts defines no podman project");
+    if (podman === undefined) return expect.unreachable("vitest.config.mts defines no podman project");
     expect(PODMAN_TEST_TIMEOUT_MS).toBe(TIMEOUT_MULTIPLE * MEASURED_P95_MS.slowestTest);
     expect(PODMAN_HOOK_TIMEOUT_MS).toBe(TIMEOUT_MULTIPLE * MEASURED_P95_MS.slowestHook);
     expect(podman.config.testTimeout).toBe(PODMAN_TEST_TIMEOUT_MS);

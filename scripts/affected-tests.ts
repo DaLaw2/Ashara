@@ -12,15 +12,24 @@
  * DEFAULT_SELECTION_CONFIG) runs only the direct tests of the changed files: a changed test file, the
  * test file a changed snapshot belongs to, the colocated `<name>.test.ts` of a changed module, and
  * the test files whose own import specifiers resolve to a changed module. One line says it was
- * capped and how many files were skipped; the merge lane's full suite runs those. A selection that
- * comes to no test file for a change that touches source fails the run instead of passing it; only a
- * change every path of which a no-test-effect rule clears (or a deleted test file) runs nothing and
- * exits 0.
+ * capped and how many files were skipped; the merge lane's full suite runs those. The cap never
+ * trims what a dependency or toolchain change selects: those tests run whatever their number, and
+ * so does the whole suite a dependency change or a whole-suite rule that is not capped selects. A
+ * selection that comes to no test file for a change that touches source fails the run instead of
+ * passing it; only a change every path of which a no-test-effect rule clears (or a deleted test
+ * file) runs nothing and exits 0.
  *
  * Mechanism: vitest's module graph (the test specifications `vitest related` would run). A test is
  * selected when it imports a changed module through any chain of static imports, or of dynamic
  * imports whose specifier is a literal. On top of the graph, rules for what the graph cannot see,
  * applied to each changed path in this order, the first that decides a path ending it:
+ * - Dependencies: the root manifest, and a manifest outside the workspaces the lockfile records,
+ *   select the whole suite. A workspace's manifest selects that workspace and every workspace that
+ *   resolves it (lockfile-impact.ts); package-lock.json selects every workspace that resolves a
+ *   changed entry, or the whole suite when the change cannot be attributed to a workspace (an entry
+ *   the root project resolves among them). A selected workspace brings every test under it, the
+ *   graph dependants of every module under it, and the graph dependants of every module that names
+ *   its package, or a changed hoisted package, in a quoted import specifier.
  * - Whole suite (WHOLE_SUITE_RULES): a file that changes how every test is collected, compiled,
  *   resolved or run, or that every database test reads at runtime. Any one such file selects the
  *   whole suite, each with the reason the table states.
@@ -50,7 +59,7 @@
  *   between test files. Only the merge lane's soak and full suite exercise these.
  * - Type-only imports are erased before the graph is built: a change that only alters types selects
  *   nothing through them, and `just check`'s typecheck is what judges it.
- * - The modules globalSetup imports (vitest.config.ts) run in every test run; only the setup file
+ * - The modules globalSetup imports (vitest.config.mts) run in every test run; only the setup file
  *   itself is a whole-suite rule, its own imports reach just the tests that import them.
  */
 
@@ -59,6 +68,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeErrorChain } from "@ashara/shared";
+import { lockfileImpact, manifestImpact, parseLockfile, type DependencyImpact, type Lockfile } from "./lockfile-impact.js";
 
 class AffectedTestsError extends Error {
   constructor(
@@ -86,23 +96,32 @@ interface PathRule {
   readonly reason: string;
 }
 
+interface WholeSuiteRule extends PathRule {
+  /** Whether the cap may trim the whole suite this rule selects down to the direct tests. */
+  readonly capped: boolean;
+}
+
 /**
  * @testseam affected-tests.test.ts exercises it without running the CLI
  */
-export const WHOLE_SUITE_RULES: readonly PathRule[] = [
-  { pattern: /^migrations\//, reason: "every database test runs on the migrated schema, and no test imports a migration" },
-  { pattern: /^boundary-rules\.toml$/, reason: "the boundary lint and the stack-literal scan read it at runtime, and their tests judge the whole tree against it" },
-  { pattern: /^eslint\.config\.mjs$/, reason: "the ESLint guard tests lint with it at runtime" },
-  { pattern: /(^|\/)tsconfig[^/]*\.json$/, reason: "it changes how every module compiles and resolves" },
-  { pattern: /(^|\/)package(-lock)?\.json$/, reason: "it changes which dependency and which workspace module every import resolves to" },
-  { pattern: /^vitest\.config\.ts$/, reason: "it changes which files are tests and how every test runs" },
-  { pattern: /^packages\/integration\/src\/cell-leak-guard\.ts$/, reason: "vitest.config.ts runs it as globalSetup around every test run" },
+export const WHOLE_SUITE_RULES: readonly WholeSuiteRule[] = [
+  { pattern: /^migrations\//, capped: true, reason: "every database test runs on the migrated schema, and no test imports a migration" },
+  { pattern: /^boundary-rules\.toml$/, capped: true, reason: "the boundary lint and the stack-literal scan read it at runtime, and their tests judge the whole tree against it" },
+  { pattern: /^eslint\.config\.mjs$/, capped: true, reason: "the ESLint guard tests lint with it at runtime" },
+  { pattern: /(^|\/)tsconfig[^/]*\.json$/, capped: true, reason: "it changes how every module compiles and resolves" },
+  { pattern: /^vitest\.config\.[cm]?[jt]s$/, capped: false, reason: "it changes which files are tests and how every test runs" },
+  { pattern: /^packages\/integration\/src\/cell-leak-guard\.ts$/, capped: true, reason: "vitest.config.mts runs it as globalSetup around every test run" },
   {
     pattern: /^packages\/integration\/src\/podman-test-load\.ts$/,
-    reason: "vitest.config.ts reads it for which files are podman tests, how many run at once and their timeouts, and the globalSetup guards for their podman bound",
+    capped: true,
+    reason: "vitest.config.mts reads it for which files are podman tests, how many run at once and their timeouts, and the globalSetup guards for their podman bound",
   },
-  { pattern: /^config\//, reason: "the runtime configuration the composition root and the test harness read by a configured path" },
+  { pattern: /^config\//, capped: true, reason: "the runtime configuration the composition root and the test harness read by a configured path" },
 ];
+
+const LOCKFILE = "package-lock.json";
+const ROOT_MANIFEST = "package.json";
+const MANIFEST_RE = /(^|\/)package(-lock)?\.json$/;
 
 const NO_TEST_EFFECT_RULES: readonly PathRule[] = [
   { pattern: /^README\.md$/, reason: "prose no test or module reads" },
@@ -118,7 +137,7 @@ export const SIMULATOR_DIR = "packages/integration/src/simulator/";
 
 const TEST_FILE_RE = /\.test\.ts$/;
 const SNAPSHOT_RE = /^(.*)\/__snapshots__\/([^/]+\.test\.ts)\.snap$/;
-/** The files vitest's graph reads: the modules tests import, in the trees vitest.config.ts includes. */
+/** The files vitest's graph reads: the modules tests import, in the trees vitest.config.mts includes. */
 const GRAPH_MODULE_RE = /^(packages\/[^/]+\/src|scripts)\/.+\.(ts|mjs|js)$/;
 
 interface SelectionBasis {
@@ -130,11 +149,20 @@ interface SelectionBasis {
 
 type Selection = SelectionBasis &
   (
-    | { readonly kind: "whole-suite"; readonly reasons: readonly string[] }
+    | {
+        readonly kind: "whole-suite";
+        readonly reasons: readonly string[];
+        /** Whether the cap may trim it; a dependency or toolchain change's whole suite runs whole. */
+        readonly capped: boolean;
+        /** The tests a dependency change in the same change selects, which the cap keeps, repo-relative, sorted. */
+        readonly required: readonly string[];
+      }
     | {
         readonly kind: "selected";
         /** Repo-relative test files, sorted. */
         readonly tests: readonly string[];
+        /** The tests a dependency change selects, which the cap keeps, repo-relative, sorted. */
+        readonly required: readonly string[];
         /** Per changed path, why it selected what it did. */
         readonly reasons: readonly string[];
       }
@@ -160,8 +188,12 @@ export const DEFAULT_SELECTION_CONFIG: SelectionConfig = { maxTests: 40 };
  * @testseam affected-tests.test.ts exercises it without running the CLI
  */
 export interface SelectionSources {
-  /** Every test file vitest.config.ts includes, repo-relative. */
+  /** Every test file vitest.config.mts includes, repo-relative. */
   readonly allTests: readonly string[];
+  /** Every tracked or untracked file of the working tree, repo-relative. */
+  readonly files: readonly string[];
+  /** A file's text at the merge base or at the head of the change; undefined where it does not exist. */
+  readonly readRevision: (file: string, side: "base" | "head") => string | undefined;
   /** The test files that import any of these modules through the graph, repo-relative. */
   readonly testsImporting: (modules: readonly string[]) => Promise<readonly string[]>;
   /** The tracked or untracked files whose text contains `name`, repo-relative. */
@@ -182,7 +214,11 @@ export async function selectTests(changes: readonly ChangedPath[], sources: Sele
   const changedModules = new Set<string>();
   const direct = new Set<string>();
   let touchesSource = false;
+  let uncappedWholeSuite = false;
   const allTests = new Set(sources.allTests);
+  const impacts: DependencyImpact[] = [];
+  let lockfiles: LockfileRevisions | undefined;
+  const readLockfiles = (): LockfileRevisions => (lockfiles ??= { base: readLockfile(sources, "base"), head: readLockfile(sources, "head") });
 
   for (const change of changes) {
     const file = change.path;
@@ -193,9 +229,22 @@ export async function selectTests(changes: readonly ChangedPath[], sources: Sele
       if (allTests.has(colocated)) direct.add(colocated);
       if (change.status !== "deleted") changedModules.add(file);
     }
+    if (MANIFEST_RE.test(file)) {
+      const impact = dependencyImpact(file, readLockfiles());
+      if (impact.kind === "whole-suite") {
+        wholeSuite.push(`${file}: ${impact.reason}`);
+        uncappedWholeSuite = true;
+      } else {
+        impacts.push(impact);
+        const names = impact.packageNames.length > 0 ? `, and of every module that imports ${impact.packageNames.join(", ")} by name` : "";
+        reasons.push(`${file}: ${impact.reason}; selects every test of ${impact.workspaces.length} workspace(s) (${impact.workspaces.join(", ")}) and the graph dependants of their modules${names}, past the cap`);
+      }
+      continue;
+    }
     const rule = WHOLE_SUITE_RULES.find((r) => r.pattern.test(file));
     if (rule !== undefined) {
       wholeSuite.push(`${file}: ${rule.reason}`);
+      if (!rule.capped) uncappedWholeSuite = true;
       continue;
     }
     const namers = sources.filesNaming(path.posix.basename(file)).filter((f) => f !== file);
@@ -252,9 +301,53 @@ export async function selectTests(changes: readonly ChangedPath[], sources: Sele
 
   if (changedModules.size > 0) for (const t of await sources.testsImportingDirectly([...changedModules])) direct.add(t);
   const basis: SelectionBasis = { direct: [...direct].sort(), touchesSource };
-  if (wholeSuite.length > 0) return { ...basis, kind: "whole-suite", reasons: wholeSuite };
+  if (wholeSuite.length > 0 && uncappedWholeSuite) return { ...basis, kind: "whole-suite", reasons: wholeSuite, capped: false, required: [] };
+  const required = await dependencyTests(impacts, sources);
+  if (wholeSuite.length > 0) return { ...basis, kind: "whole-suite", reasons: [...wholeSuite, ...reasons], capped: true, required };
   if (graphModules.size > 0) for (const t of await sources.testsImporting([...graphModules])) tests.add(t);
-  return { ...basis, kind: "selected", tests: [...tests].sort(), reasons };
+  for (const t of required) tests.add(t);
+  return { ...basis, kind: "selected", tests: [...tests].sort(), required, reasons };
+}
+
+interface LockfileRevisions {
+  readonly base: Lockfile | undefined;
+  readonly head: Lockfile | undefined;
+}
+
+function readLockfile(sources: SelectionSources, side: "base" | "head"): Lockfile | undefined {
+  const text = sources.readRevision(LOCKFILE, side);
+  return text === undefined ? undefined : parseLockfile(text, `${LOCKFILE} at the ${side}`);
+}
+
+function dependencyImpact(file: string, lockfiles: LockfileRevisions): DependencyImpact {
+  if (file === LOCKFILE) return lockfileImpact(lockfiles.base, lockfiles.head);
+  if (file === ROOT_MANIFEST) return { kind: "whole-suite", reason: "the root manifest declares the toolchain every test runs under and the workspaces every import resolves through" };
+  const workspace = /^(.+)\/package\.json$/.exec(file)?.[1];
+  if (workspace === undefined) return { kind: "whole-suite", reason: "a lockfile other than the root's, which no workspace attribution reads" };
+  return manifestImpact(workspace, lockfiles.base, lockfiles.head);
+}
+
+/** The quoted import specifiers a module that imports `name`, or a subpath of it, spells. */
+function specifierSpellings(name: string): string[] {
+  return [`"${name}"`, `"${name}/`, `'${name}'`, `'${name}/`];
+}
+
+/** Every test a dependency change reaches, repo-relative and sorted; see the header's dependency rule. */
+async function dependencyTests(impacts: readonly DependencyImpact[], sources: SelectionSources): Promise<string[]> {
+  const required = new Set<string>();
+  const modules = new Set<string>();
+  const allTests = new Set(sources.allTests);
+  const take = (file: string): void => {
+    if (allTests.has(file)) required.add(file);
+    else if (GRAPH_MODULE_RE.test(file) && !TEST_FILE_RE.test(file)) modules.add(file);
+  };
+  for (const impact of impacts) {
+    if (impact.kind !== "workspaces") continue;
+    for (const workspace of impact.workspaces) for (const file of sources.files) if (file.startsWith(`${workspace}/`)) take(file);
+    for (const name of impact.packageNames) for (const spelling of specifierSpellings(name)) for (const file of sources.filesNaming(spelling)) take(file);
+  }
+  if (modules.size > 0) for (const t of await sources.testsImporting([...modules])) required.add(t);
+  return [...required].sort();
 }
 
 /**
@@ -278,9 +371,13 @@ export function boundSelection(selection: Selection, allTestCount: number, confi
   const count = selection.kind === "whole-suite" ? allTestCount : selection.tests.length;
   let tests: readonly string[];
   let notice: string | undefined;
-  if (count > config.maxTests) {
-    tests = selection.direct;
-    notice = `selection capped: ${count} test files exceed the cap of ${config.maxTests}; running the ${tests.length} direct test file(s) of the changed files, ${count - tests.length} skipped; the merge lane's full suite covers them`;
+  if (selection.kind === "whole-suite" && !selection.capped) {
+    return { kind: "whole-suite", count };
+  } else if (count > config.maxTests) {
+    const required = selection.required;
+    tests = [...new Set([...selection.direct, ...required])].sort();
+    const kept = required.length === 0 ? "direct test file(s) of the changed files" : "direct test file(s) of the changed files and every test file of the changed dependencies";
+    notice = `selection capped: ${count} test files exceed the cap of ${config.maxTests}; running the ${tests.length} ${kept}, ${count - tests.length} skipped; the merge lane's full suite covers them`;
   } else if (selection.kind === "whole-suite") {
     return { kind: "whole-suite", count };
   } else {
@@ -331,7 +428,13 @@ export function parseNameStatus(output: string): ChangedPath[] {
   return changes;
 }
 
-function changedPaths(root: string, base: string, head: string | undefined): ChangedPath[] {
+interface Change {
+  /** The merge base the change is measured from. */
+  readonly from: string;
+  readonly paths: ChangedPath[];
+}
+
+function changedPaths(root: string, base: string, head: string | undefined): Change {
   const tip = head ?? "HEAD";
   git(root, ["rev-parse", "--verify", "--quiet", `${base}^{commit}`]);
   git(root, ["rev-parse", "--verify", "--quiet", `${tip}^{commit}`]);
@@ -343,21 +446,44 @@ function changedPaths(root: string, base: string, head: string | undefined): Cha
       if (file !== "") changes.push({ path: file, status: "added" });
     }
   }
-  return changes;
+  return { from, paths: changes };
+}
+
+/**
+ * The revisions selection reads files at: `base` the merge base, `head` the change's tip, or the
+ * working tree when undefined.
+ * @testseam affected-tests.test.ts exercises it without running the CLI
+ */
+export interface Revisions {
+  readonly base: string;
+  readonly head: string | undefined;
+}
+
+function textAt(root: string, revision: string, file: string): string | undefined {
+  if (git(root, ["ls-tree", "-z", "--name-only", revision, "--", file]) === "") return undefined;
+  return git(root, ["show", `${revision}:${file}`]);
 }
 
 /**
  * The vitest-backed SelectionSources of the repository at `root`, closed by `close`.
  * @testseam affected-tests.test.ts exercises it without running the CLI
  */
-export async function repositorySources(root: string): Promise<SelectionSources & { close: () => Promise<void> }> {
+export async function repositorySources(root: string, revisions: Revisions): Promise<SelectionSources & { close: () => Promise<void> }> {
   // Imported where it is used: tsx runs this repo's scripts as CommonJS, and vitest/node is ESM only.
   const { createVitest } = await import("vitest/node");
   const vitest = await createVitest("test", { root, watch: false, run: true, reporters: [] });
   const relative = (abs: string): string => path.relative(root, abs).split(path.sep).join("/");
   const allTests = [...new Set((await vitest.globTestSpecifications()).map((s) => relative(s.moduleId)))].sort();
+  const files = git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter((f) => f !== "");
   return {
     allTests,
+    files,
+    readRevision: (file, side) => {
+      if (side === "base") return textAt(root, revisions.base, file);
+      if (revisions.head !== undefined) return textAt(root, revisions.head, file);
+      const full = path.join(root, file);
+      return fs.existsSync(full) ? fs.readFileSync(full, "utf-8") : undefined;
+    },
     testsImporting: async (modules) => {
       vitest.config.related = modules.map((m) => path.join(root, m));
       const specs = await vitest.getRelevantTestSpecifications();
@@ -458,8 +584,8 @@ async function main(): Promise<number> {
   const cli = parseCli(process.argv.slice(2));
   const root = process.cwd();
   if (!fs.existsSync(VITEST_BIN)) throw new AffectedTestsError("vitest", `${VITEST_BIN} is missing; run npm ci`);
-  const changes = changedPaths(root, cli.base, cli.head);
-  const sources = await repositorySources(root);
+  const { from, paths: changes } = changedPaths(root, cli.base, cli.head);
+  const sources = await repositorySources(root, { base: from, head: cli.head });
   let selection: Selection;
   try {
     selection = await selectTests(changes, sources);

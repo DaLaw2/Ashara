@@ -73,7 +73,7 @@ typecheck-full:
 test-images:
     timeout 1200 npx tsx packages/integration/src/test-images-pull.ts
 
-# Bounded: SIGTERM after 20 minutes, which the cell-leak guard (vitest.config.ts globalSetup)
+# Bounded: SIGTERM after 20 minutes, which the cell-leak guard (vitest.config.mts globalSetup)
 # answers by removing the run's cells before vitest exits; SIGKILL only if the run is still alive
 # 150 s later. That grace outlasts the guard's signal-time removal at its worst, one podman listing
 # and one podman rm, each bounded by cell-leak-guard.ts PODMAN_TIMEOUT_MS: a SIGKILL inside it would
@@ -88,7 +88,7 @@ test: _test-db-ready
     set -u
     # Every temp file goes under the scratch root (scripts/scratch-root.ts: a tmpfs unless
     # ASHARA_SCRATCH_ROOT names another), or the recipe stops naming why it cannot. The podman
-    # store follows vitest.config.ts (useTestPodmanStore), so a direct `npx vitest` gets it too.
+    # store follows vitest.config.mts (useTestPodmanStore), so a direct `npx vitest` gets it too.
     scratch=$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts) || exit 1
     export TMPDIR="$scratch"
     timeout -k 150 1200 npx vitest run &

@@ -1,8 +1,10 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { extractCommentLines } from "./check-comments.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -19,6 +21,7 @@ const Manifest = z.object({
 const Lockfile = z.object({
   packages: z.record(z.string(), z.object({ version: z.string().optional() })),
 });
+type Lockfile = z.output<typeof Lockfile>;
 
 const EXACT = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const ALIAS = /^npm:(?:@[^/@]+\/)?[^/@]+@(.+)$/;
@@ -64,6 +67,51 @@ function pinnedVersion(name: string, spec: string): string {
   throw new TypeError(`${name} is declared as "${spec}", which pins no exact version`);
 }
 
+/** Every copy of `name` the lockfile installs: the hoisted one and each nested under another package or a workspace. */
+function lockedCopies(lock: Lockfile, name: string): { key: string; version: string | undefined }[] {
+  return Object.entries(lock.packages)
+    .filter(([key]) => key === `node_modules/${name}` || key.endsWith(`/node_modules/${name}`))
+    .map(([key, entry]) => ({ key, version: entry.version }));
+}
+
+function lockMismatches(lock: Lockfile, declared: ReadonlyMap<string, readonly Declaration[]>): string[] {
+  return [...declared].flatMap(([name, declarations]) => {
+    const first = declarations[0];
+    if (first === undefined) throw new TypeError(`${name} has no declaration`);
+    const pinned = pinnedVersion(name, first.spec);
+    const copies = lockedCopies(lock, name);
+    if (copies.length === 0) return [`${name}: pinned ${pinned}, not locked`];
+    return copies.filter(({ version }) => version !== pinned).map(({ key, version }) => `${name}: pinned ${pinned}, ${key} locked ${String(version)}`);
+  });
+}
+
+function rootDevDependencies(): string[] {
+  return Object.keys(Manifest.parse(readJson("package.json")).devDependencies ?? {});
+}
+
+function escaped(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+}
+
+/** The comment lines that name one of `tools` followed by a version number. */
+function versionedToolComments(files: ReadonlyMap<string, string>, tools: readonly string[]): string[] {
+  const named = new RegExp(`(?<![\\w@/.-])(?:${tools.map(escaped).join("|")})\\s+v?\\d+(?:\\.\\d+)*\\b`, "i");
+  const found: string[] = [];
+  for (const [file, content] of files) {
+    for (const { line, text } of extractCommentLines(file, content)) if (named.test(text)) found.push(`${file}:${line}: ${text.trim()}`);
+  }
+  return found;
+}
+
+function trackedFiles(): Map<string, string> {
+  const files = new Map<string, string>();
+  for (const file of execFileSync("git", ["ls-files", "-z"], { cwd: ROOT, encoding: "utf8" }).split("\0")) {
+    const full = path.join(ROOT, file);
+    if (file !== "" && fs.existsSync(full) && fs.statSync(full).isFile()) files.set(file, fs.readFileSync(full, "utf8"));
+  }
+  return files;
+}
+
 // A dependency upgraded in one workspace and not another installs two copies, and the stale one keeps its advisories.
 describe("dependency versions", () => {
   const declared = externalDeclarations();
@@ -80,15 +128,44 @@ describe("dependency versions", () => {
     expect(disagreements).toEqual([]);
   });
 
-  test("the lockfile resolves every fetched dependency at the exact version its manifests pin", () => {
-    const lock = Lockfile.parse(readJson("package-lock.json"));
-    const mismatches = [...declared].flatMap(([name, declarations]) => {
-      const first = declarations[0];
-      if (first === undefined) throw new TypeError(`${name} has no declaration`);
-      const pinned = pinnedVersion(name, first.spec);
-      const resolved = lock.packages[`node_modules/${name}`]?.version;
-      return resolved === pinned ? [] : [`${name}: pinned ${pinned}, locked ${String(resolved)}`];
-    });
-    expect(mismatches).toEqual([]);
+  test("the lockfile resolves every copy of every fetched dependency, nested ones included, at the exact version its manifests pin", () => {
+    expect(lockMismatches(Lockfile.parse(readJson("package-lock.json")), declared)).toEqual([]);
+  });
+
+  test("a nested copy at another version is reported, under another package or under a workspace", () => {
+    const zod: Declaration[] = [{ manifest: "package.json", spec: "4.6.7" }];
+    const lock: Lockfile = {
+      packages: {
+        "": {},
+        "node_modules/zod": { version: "4.6.7" },
+        "node_modules/a/node_modules/zod": { version: "3.25.0" },
+        "packages/x/node_modules/zod": { version: "4.0.0" },
+        "node_modules/not-zod": { version: "1.0.0" },
+      },
+    };
+    expect(lockMismatches(lock, new Map([["zod", zod]]))).toEqual([
+      "zod: pinned 4.6.7, node_modules/a/node_modules/zod locked 3.25.0",
+      "zod: pinned 4.6.7, packages/x/node_modules/zod locked 4.0.0",
+    ]);
+    expect(lockMismatches({ packages: { "": {} } }, new Map([["zod", zod]]))).toEqual(["zod: pinned 4.6.7, not locked"]);
+  });
+});
+
+// A comment that pins the toolchain's version goes stale on the next upgrade, which never edits it.
+describe("toolchain versions in comments", () => {
+  test("no comment names a root devDependency at a version", () => {
+    expect(versionedToolComments(trackedFiles(), rootDevDependencies())).toEqual([]);
+  });
+
+  test("a toolchain version in a comment is found, a version in code and another word's number are not", () => {
+    const files = new Map([
+      ["a.ts", "// on firing it exits (vitest 4.1.10, cli-api close())\nexport const a = 1;\n"],
+      ["b.mts", '/* typescript v7 strips it */\nexport const b = "vitest 4.1.10";\n'],
+      ["c.ts", "// my-vitest 4 and vitest-extra 2 are other packages; vitest runs it\nexport const c = 1;\n"],
+    ]);
+    expect(versionedToolComments(files, ["vitest", "typescript"])).toEqual([
+      "a.ts:1: // on firing it exits (vitest 4.1.10, cli-api close())",
+      "b.mts:1: /* typescript v7 strips it */",
+    ]);
   });
 });

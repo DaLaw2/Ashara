@@ -6,7 +6,7 @@ class TestCellRunMissing extends Error {
   constructor(readonly provided: unknown) {
     super(
       `testCellInstance: the vitest run provides no cellRun (got ${JSON.stringify(provided) ?? "undefined"}); ` +
-        "vitest.config.ts must name packages/integration/src/cell-leak-guard.ts as globalSetup",
+        "vitest.config.mts must name packages/integration/src/cell-leak-guard.ts as globalSetup",
     );
     this.name = "TestCellRunMissing";
   }

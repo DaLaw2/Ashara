@@ -110,13 +110,32 @@ function writeFixtureRecords(checkout: string): void {
   }
 }
 
+// The manifests this checkout's install was made from, in its working tree: committed or not, they
+// are what the source's lockfile is compared with, so the fixture checkout holds the same ones.
+function liveManifests(): string[] {
+  const workspaces = workspacePackages(REPO).map(({ dir }) => path.join(dir, "package.json"));
+  return ["package.json", "package-lock.json", ...workspaces];
+}
+
+function commitLiveManifests(checkout: string): void {
+  const manifests = liveManifests();
+  for (const rel of manifests) {
+    fs.mkdirSync(path.dirname(path.join(checkout, rel)), { recursive: true });
+    fs.copyFileSync(path.join(REPO, rel), path.join(checkout, rel));
+  }
+  git(checkout, "add", "--", ...manifests);
+  const identity = ["-c", "user.name=fixture", "-c", "user.email=fixture@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
+  git(checkout, ...identity, "commit", "--quiet", "--no-verify", "--allow-empty", "-m", "the source checkout's manifests");
+}
+
 beforeAll(() => {
-  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ashara-worktree-setup-")));
+  tmp =fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ashara-worktree-setup-")));
   mainCheckout = path.join(tmp, "main");
   worktree = path.join(tmp, "wt");
   git(tmp, "init", "--quiet", mainCheckout);
   git(mainCheckout, "fetch", "--quiet", "--depth=1", REPO, "HEAD");
   git(mainCheckout, "checkout", "--quiet", "--detach", "FETCH_HEAD");
+  commitLiveManifests(mainCheckout);
   writeFixtureRecords(mainCheckout);
   const install = setupFromRepo(mainCheckout);
   expect(install.status, install.stderr).toBe(0);
@@ -128,6 +147,14 @@ afterAll(() => {
 });
 
 describe("worktree-setup", () => {
+  test("the fixture checkouts hold the manifests and lockfile of this checkout's working tree, so the source's lockfile is compared like with like", () => {
+    for (const rel of liveManifests()) {
+      const live = fs.readFileSync(path.join(REPO, rel));
+      expect(fs.readFileSync(path.join(mainCheckout, rel)).equals(live), `${rel} in the fixture main checkout`).toBe(true);
+      expect(fs.readFileSync(path.join(worktree, rel)).equals(live), `${rel} in the fixture worktree`).toBe(true);
+    }
+  });
+
   test("links a fresh worktree so typecheck runs and every workspace package resolves into the worktree, idempotently, leaving the main checkout untouched", () => {
     const mainBefore = workspaceRealpaths(mainCheckout);
     const mainLinksBefore = linkSnapshot(path.join(mainCheckout, "node_modules"));
@@ -243,10 +270,10 @@ describe("worktree-setup", () => {
     const target = path.join(tmp, "drift-target");
     fs.mkdirSync(path.join(source, "node_modules"), { recursive: true });
     fs.mkdirSync(target);
-    const lockText = fs.readFileSync(path.join(REPO, "package-lock.json"), "utf8");
+    const lockText = fs.readFileSync(path.join(mainCheckout, "package-lock.json"), "utf8");
     for (const dir of [source, target]) {
       fs.writeFileSync(path.join(dir, "package-lock.json"), lockText);
-      fs.copyFileSync(path.join(REPO, "package.json"), path.join(dir, "package.json"));
+      fs.copyFileSync(path.join(mainCheckout, "package.json"), path.join(dir, "package.json"));
     }
     const LockPackages = z.object({ packages: z.record(z.string(), z.object({ version: z.string().optional(), optional: z.boolean().optional() }).passthrough()) });
     const { packages } = LockPackages.parse(JSON.parse(lockText));

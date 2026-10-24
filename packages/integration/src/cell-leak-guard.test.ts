@@ -120,10 +120,10 @@ describe("the end-of-run leak check", () => {
 describe("the bounds around the guard", () => {
   const ROOT = path.resolve(HERE, "../../..");
 
-  test("vitest.config.ts sets a teardownTimeout whose share for the end-of-run check covers its podman worst case", async () => {
-    const config = await readFile(path.join(ROOT, "vitest.config.ts"), "utf8");
+  test("vitest.config.mts sets a teardownTimeout whose share for the end-of-run check covers its podman worst case", async () => {
+    const config = await readFile(path.join(ROOT, "vitest.config.mts"), "utf8");
     const set = /^\s*teardownTimeout:\s*([\d_]+),/m.exec(config)?.[1];
-    if (set === undefined) return expect.unreachable("vitest.config.ts sets no teardownTimeout: vitest's 10 s default would cut the check short");
+    if (set === undefined) return expect.unreachable("vitest.config.mts sets no teardownTimeout: vitest's 10 s default would cut the check short");
     expect(Number(set.replaceAll("_", "")) * GUARD_PODMAN_BUDGET.teardownShare).toBeGreaterThanOrEqual(GUARD_PODMAN_BUDGET.worstCaseMs);
   });
 
