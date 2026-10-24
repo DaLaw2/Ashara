@@ -49,6 +49,7 @@ function run(
   workspacePath: string | null = null,
   client: ClientSide = { askable: true, answered: true },
   faultsBefore = 0,
+  duringRead: () => void = () => undefined,
 ) {
   let faults = faultsBefore;
   const saves: Array<{ id: string; prev: WorkItemStatus; status: WorkItemStatus; reason: unknown }> = [];
@@ -58,6 +59,10 @@ function run(
   const blocks: Array<{ readonly projectId: string; readonly cause: ProjectBlockCause }> = [];
   const workItemRepo: WorkItemRepository = inertWorkItemRepo({
     findByProjectAndStatus: async (_projectId, status) => items.filter((i) => i.status === status).map((i) => ({ ...i, events: [] })),
+    findById: async (id) => {
+      const found = items.find((i) => i.id === id);
+      return found === undefined ? null : { ...found, events: [] };
+    },
     listByProject: async () => items.map((i) => ({ ...i, events: [] })),
     listDependenciesByProject: async () => [],
     save: async (item, prev) => {
@@ -74,7 +79,10 @@ function run(
     eventStore: { publish: async (event) => void published.push(event) },
     projects: {
       listActiveIds: async () => [PROJECT],
-      get: async () => ({ workspacePath }),
+      get: async () => {
+        duringRead();
+        return { workspacePath };
+      },
       block: async (projectId, cause) => {
         blocks.push({ projectId, cause });
         return "blocked";
@@ -341,6 +349,20 @@ describe("orphan_unreconciled reads main again before it leaves Blocked", () => 
     expect(blocks).toEqual([{ projectId: PROJECT, cause: expect.objectContaining({ category: "fault", errorClass: "OrphanUnreconciled" }) }]);
   });
 
+  test("main unread while the owner abandons it during the read: neither counted on its fault budget nor its project halted", async () => {
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    repos.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const items = [blocked(unreconciled)];
+    const abandon = (): void => void items.splice(0, 1, ...items.map((each) => ({ ...each, status: "Abandoned" as const })));
+    const { released, saves, blocks, faults } = run(items, false, notExercised("recordMergeCommit"), unreadable, undefined, 3, abandon);
+
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(faults()).toBe(3);
+    expect(blocks).toEqual([]);
+  });
+
   test("a refused workspace path: the project halts at once, nothing counted, no retry can clear it", async () => {
     const outside = mkdtempSync(join("/var/tmp", "ashara-parked-outside-"));
     repos.push(outside);
@@ -398,6 +420,19 @@ describe("a task held for the client's answer: its question is posted from the h
     expect(saves).toEqual([]);
     expect(blocks).toEqual([]);
     expect(faults()).toBe(1);
+  });
+
+  test("its answer read with main unread while the owner abandons it during the read: neither counted on its fault budget nor its project halted", async () => {
+    const unreadable = mkdtempSync(join(tmpdir(), "ashara-parked-"));
+    repos.push(unreadable);
+    mkdirSync(join(unreadable, ".git"));
+    const items = [blocked(held)];
+    const abandon = (): void => void items.splice(0, 1, ...items.map((each) => ({ ...each, status: "Abandoned" as const })));
+    const { released, saves, blocks, faults } = run(items, false, notExercised("recordMergeCommit"), unreadable, { askable: true, answered: true }, 3, abandon);
+    expect(await released).toBe(0);
+    expect(saves).toEqual([]);
+    expect(blocks).toEqual([]);
+    expect(faults()).toBe(3);
   });
 
   test("unanswered once no other work of the project could proceed, the project halts on client_wait and the task is neither given up nor moved", async () => {
