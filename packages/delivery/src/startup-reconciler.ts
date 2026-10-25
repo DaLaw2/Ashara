@@ -1,5 +1,5 @@
 import type { DomainEvent, Logger, ProjectId } from "@ashara/shared";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, retryWait } from "@ashara/shared";
 import type { EventStoreRepository } from "@ashara/db";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
@@ -269,7 +269,7 @@ async function settleOrphan(deps: StartupReconcilerDeps, orphan: WorkItem): Prom
         error,
       );
       if (wait === undefined) break;
-      await new Promise((resolve) => setTimeout(resolve, wait));
+      await retryWait(wait);
     }
   }
   const unsettled = new OrphanUnreconciled(orphan.id, step, attempts, { cause: last });
@@ -319,7 +319,7 @@ async function blockUnsettled(
       last = error;
       const wait = MERGE_RECORD_BACKOFF_MS[attempt - 1];
       deps.logger.warn("delivery.orphan-block-failed", `orphan ${orphan.id}: its block failed on attempt ${attempt}`, { taskId: orphan.id, attempt }, error);
-      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
+      if (wait !== undefined) await retryWait(wait);
     }
   }
   throw new OrphanUnreconciled(orphan.id, `block it (${reason.source}) after this: ${unsettled.message}; the block`, MERGE_RECORD_BACKOFF_MS.length + 1, {

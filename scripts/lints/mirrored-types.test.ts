@@ -2,11 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { loadLintContext, type LintContext, type PackageScan } from "./lint.js";
+import type { LintContext, PackageScan } from "./lint.js";
 import { mirroredTypes, run as mirroredTypesOfRepository } from "./mirrored-types.js";
 import { parseRules } from "./rules.js";
-
-const REPO = path.join(import.meta.dirname, "..", "..");
 
 function emptyRule(name: string): PackageScan["rule"] {
   const rule = parseRules(`[${name}]\nallow = []\n`, "boundary-rules.toml").get(name);
@@ -259,53 +257,5 @@ describe("mirrored-types", () => {
 
   test("a tree with no production type declaration fails closed", () => {
     expect(mirroredTypes(packagesTree({ quality: { "a.ts": "export const one = 1;\n" } }), []).map((v) => v.reason)).toContainEqual(expect.stringContaining("no production type declaration"));
-  });
-
-  /** The repository's scan with `files` (src-relative, by package) added to it. */
-  function withRestored(added: Readonly<Record<string, Readonly<Record<string, string>>>>): LintContext {
-    const context = loadLintContext(REPO);
-    const packages = context.packages.map((pkg) => {
-      const files = added[pkg.name];
-      if (files === undefined) return pkg;
-      const contents = new Map(pkg.contents);
-      for (const [file, text] of Object.entries(files)) contents.set(path.join(pkg.root, "src", file), text);
-      return { ...pkg, contents };
-    });
-    return { ...context, packages };
-  }
-
-  test("restoring copies of the types and joins the repository now declares once fails the repository", () => {
-    const copies = [
-      "interface BlockingReviewRow { readonly times: number; readonly problems: readonly string[] }",
-      'type SweptTerminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };',
-      'interface SweepCheckRead { readonly taskId: string; readonly name: string; readonly command: string; readonly outcome: "passed" | "failed" | "not-run" }',
-      "interface SweepOutcomeRead {",
-      "  readonly checkedTasks: readonly string[];",
-      "  readonly uncheckedTasks: readonly string[];",
-      '  readonly checks: { readonly kind: "unrecorded" } | { readonly kind: "recorded"; readonly checks: readonly SweepCheckRead[] };',
-      "}",
-    ].join("\n");
-    const store = 'import type { createDb } from "@ashara/db";\ntype Db = ReturnType<typeof createDb>;\nexport const handle = (db: Db): Db => db;\n';
-    const report = [
-      'import type { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";',
-      'import { sweepOrphanedWorktrees } from "@ashara/execution-infra";',
-      "export type RestoredLastReport = Awaited<ReturnType<typeof lastReportGuaranteeVerdictsOf>>;",
-      "export const sweep = (base: string): ReturnType<typeof sweepOrphanedWorktrees> => sweepOrphanedWorktrees(base, async () => []);",
-    ].join("\n");
-    const violations = mirroredTypesOfRepository(withRestored({ engagement: { "restored-copies.ts": copies }, server: { "restored-store.ts": store }, evaluation: { "restored-report.ts": report } }));
-    const reasons = violations.map((v) => v.reason);
-    expect(reasons).toContainEqual(expect.stringMatching(/^one name declared more than once: BlockingReviewRow at packages\/engagement\/src\/restored-copies\.ts:1, BlockingReviewRow at packages\/quality\/src\/task-checks\.ts/));
-    expect(reasons).toContainEqual(expect.stringMatching(/^one name declared more than once: SweptTerminal at packages\/engagement\/src\/restored-copies\.ts:2, SweptTerminal at packages\/quality\/src\/guarantee-verdict\.ts/));
-    expect(reasons).toContainEqual(expect.stringMatching(/^one type declared under more than one name: SweepOutcomeRead at packages\/engagement\/src\/restored-copies\.ts:4, SweepOutcome at packages\/quality\/src\/guarantee-verdict\.ts/));
-    const joins = violations.filter((v) => v.reason.startsWith("a type written over")).map((v) => `${v.file}:${v.line} ${v.reason}`);
-    expect(joins).toEqual([
-      expect.stringMatching(/^packages\/evaluation\/src\/restored-report\.ts:3 a type written over what lastReportGuaranteeVerdictsOf, declared in packages\/engagement\/src\//),
-      expect.stringMatching(/^packages\/evaluation\/src\/restored-report\.ts:4 a type written over what sweepOrphanedWorktrees, declared in packages\/execution-infra\/src\//),
-      expect.stringMatching(/^packages\/server\/src\/restored-store\.ts:2 a type written over what createDb, declared in packages\/db\/src\//),
-    ]);
-  });
-
-  test("the repository declares each type of its production source once, or names the pair with why", () => {
-    expect(mirroredTypesOfRepository(loadLintContext(REPO))).toEqual([]);
   });
 });

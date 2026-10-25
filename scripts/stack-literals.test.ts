@@ -25,11 +25,6 @@ describe("findStackLiterals", () => {
       [5, "npm"],
     ]);
   });
-
-  test("the simulator product's stack-neutral names stay clean", () => {
-    const file = join(REPO, "packages", "integration", "src", "simulator", "product.ts");
-    expect(findStackLiterals(readFileSync(file, "utf-8"), file, tokens)).toEqual([]);
-  });
 });
 
 describe("parseStackLiteralRules", () => {

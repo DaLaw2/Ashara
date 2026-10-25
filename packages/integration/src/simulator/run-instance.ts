@@ -426,6 +426,7 @@ export class SimulatedProcess {
     for (let polls = 0; ; polls++) {
       const left = await this.backendsOf(name);
       if (left === 0 || polls >= BACKEND_EXIT_POLLS) return left;
+      // eslint-disable-next-line no-restricted-syntax -- real wait: the server ends a terminated backend
       await new Promise((resolve) => setTimeout(resolve, BACKEND_EXIT_POLL_MS));
     }
   }

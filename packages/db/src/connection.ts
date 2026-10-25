@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-syntax -- real wait: a conflict clears only once the other transaction ends, which no simulated clock moves
 import { setTimeout as sleep } from "node:timers/promises";
 import { drizzle } from "drizzle-orm/node-postgres";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";

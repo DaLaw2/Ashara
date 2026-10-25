@@ -96,6 +96,7 @@ function isLoopbackHttp(url: URL): boolean {
 }
 
 function delay(ms: number): Promise<void> {
+  // eslint-disable-next-line no-restricted-syntax -- real wait: the refusal of a login is held until its floor has passed on the host, as the client feels it
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 

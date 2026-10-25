@@ -2,8 +2,10 @@ import { execFile, execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, WHOLE_SUITE_RULES, type BoundedRun, type ChangedPath, type Selection, type SelectionSources } from "./affected-tests.js";
+import { boundSelection, parseNameStatus, repositorySources, selectTests, WHOLE_SUITE_RULES, type BoundedRun, type ChangedPath, type Selection, type SelectionSources } from "./affected-tests.js";
 import { isCheckoutSource } from "./module-program.js";
+import { BOUND_MARGIN, MEASURED_SUITE, runBound, SIMULATOR_DIR, type SuiteFile } from "./test-run-budget.js";
+import { boundedRun, planRun } from "./test-run.js";
 
 const REPO = path.join(import.meta.dirname, "..");
 const SCRIPT = path.join(import.meta.dirname, "affected-tests.ts");
@@ -637,5 +639,45 @@ describe("a planted break in a scratch repository", () => {
     expect(run.output).toContain("runs the whole suite: every one of its 2 test files");
     expect(run.output).not.toMatch(/skip/);
     expect(run.code, run.output).toBe(0);
+  });
+});
+
+// The bound a run gets is derived from what it runs, so the whole suite fits its own; a run past it
+// is stopped and fails naming the bound and each file it did not finish, never a pass.
+describe("a run's wall bound", () => {
+  test("grows with the selection and shrinks with the workers, and the whole suite at 2 workers gets at least its measured per-file wall times its files over its workers, with margin", async () => {
+    const whole = (await planRun(REPO, [], ["--maxWorkers=2"])).files;
+    const atTwo = runBound(whole);
+    const measuredPerFile = MEASURED_SUITE.fileWallS / MEASURED_SUITE.files;
+    expect(atTwo.seconds).toBeGreaterThanOrEqual(((measuredPerFile * whole.length) / 2) * BOUND_MARGIN);
+    expect(runBound((await planRun(REPO, [], ["--maxWorkers=3"])).files).seconds).toBeLessThan(atTwo.seconds);
+    expect(runBound(whole.slice(0, Math.floor(whole.length / 2))).seconds).toBeLessThan(atTwo.seconds);
+    expect(atTwo.rule).toContain(`${whole.length} test file(s)`);
+    const simulator = whole.filter((file) => file.path.startsWith(SIMULATOR_DIR));
+    expect(simulator.length).toBeGreaterThan(0);
+    const others = whole.filter((file) => file.project !== "podman" && !file.path.startsWith(SIMULATOR_DIR)).slice(-simulator.length);
+    expect(runBound(simulator).seconds).toBeGreaterThan(runBound(others).seconds);
+  });
+
+  test("a sequence group whose files name different worker counts has no bound: vitest runs a group on one count", () => {
+    const file = (name: string, workers: number): SuiteFile => ({ path: name, project: "default", group: 0, workers });
+    expect(() => runBound([file("a.test.ts", 2), file("b.test.ts", 3)])).toThrow(/runs a group on one count/);
+    expect(() => runBound([file("a.test.ts", 0)])).toThrow(/not a whole number of workers/);
+  });
+
+  test("a run that ends within its bound exits as it ended", async () => {
+    const result = await boundedRun({ file: process.execPath, args: ["-e", "process.exit(3)"] }, REPO, { seconds: 60, rule: "probe" }, ["a.test.ts"]);
+    expect(result).toEqual({ exitCode: 3, report: null });
+  });
+
+  test("a run past its bound is stopped and exits non-zero, naming the bound and every test file it did not finish", async () => {
+    const finishesOne = 'require("node:fs").appendFileSync(process.env.ASHARA_TEST_RUN_PROGRESS, "a.test.ts\\n"); setInterval(() => {}, 1000);';
+    const result = await boundedRun({ file: process.execPath, args: ["-e", finishesOne] }, REPO, { seconds: 1, rule: "a probe's rule" }, ["a.test.ts", "b.test.ts", "c.test.ts"]);
+    expect(result.exitCode).toBe(124);
+    expect(result.report).toContain("passed its bound of 1 s (a probe's rule)");
+    expect(result.report).toContain("2 of 3 test file(s) did not finish");
+    expect(result.report).toMatch(/^ {2}b\.test\.ts$/m);
+    expect(result.report).toMatch(/^ {2}c\.test\.ts$/m);
+    expect(result.report).not.toMatch(/^ {2}a\.test\.ts$/m);
   });
 });

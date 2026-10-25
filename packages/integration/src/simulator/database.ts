@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
+// eslint-disable-next-line no-restricted-syntax -- real wait: a database stays in use until its sessions end
 import { setTimeout as delay } from "node:timers/promises";
 import pg from "pg";
 import { z } from "zod";

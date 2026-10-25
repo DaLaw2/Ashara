@@ -127,13 +127,4 @@ describe("the bounds around the guard", () => {
     expect(Number(set.replaceAll("_", "")) * GUARD_PODMAN_BUDGET.teardownShare).toBeGreaterThanOrEqual(GUARD_PODMAN_BUDGET.worstCaseMs);
   });
 
-  test("just test waits out the guard's signal-time removal before its SIGKILL, and forwards a terminal's Ctrl+C to vitest's process group", async () => {
-    const justfile = await readFile(path.join(ROOT, "justfile"), "utf8");
-    const recipe = /^test:[^\n]*\n((?: {4}.*\n|\n)+)/m.exec(justfile)?.[1] ?? "";
-    const grace = /timeout -k (\d+) \d+ npx vitest run/.exec(recipe)?.[1];
-    if (grace === undefined) return expect.unreachable(`just test runs no bounded vitest:\n${recipe}`);
-    expect(Number(grace) * 1000).toBeGreaterThanOrEqual(GUARD_PODMAN_BUDGET.worstCaseMs);
-    expect(recipe).not.toContain("--foreground");
-    expect(recipe).toMatch(/trap 'kill -INT -- "-\$run"[^']*' INT/);
-  });
 });

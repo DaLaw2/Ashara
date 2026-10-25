@@ -39,6 +39,8 @@ const NAME_PREFIX = `shutdown-cells-test-${randomUUID().slice(0, 8)}`;
 const SHUTDOWN_DEADLINE_MS = 10_000;
 /** How far past the shutdown's deadline this test waits before it fails the shutdown as unbounded. */
 const TEST_BOUND_MARGIN_MS = 2_000;
+/** How often the commands' start file is read: the poll waits at most this long past their start. */
+const EXEC_POLL_MS = 5;
 const HANG = "sleep 3600";
 const LIMITS = { memoryBytes: 256 * 1024 * 1024, cpus: 0.5, pids: 64 };
 
@@ -341,7 +343,7 @@ describe("a shutdown while commands run in cells", () => {
     const waitUntil = Date.now() + SHUTDOWN_DEADLINE_MS;
     while ((await lines(join(state, "execs"))).length < 2) {
       if (Date.now() > waitUntil) throw new Error("the two commands never started in their cells");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, EXEC_POLL_MS));
     }
     const execs = (await lines(join(state, "execs"))).map(Number);
     expect(execs.every(alive)).toBe(true);

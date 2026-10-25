@@ -119,6 +119,21 @@ const PRODUCTION_SYNTAX = [
     message:
       "Bare Error (typed errors only). Throw a class extending Error whose fields carry the structured context; the message alone must say what, where and why.",
   },
+  {
+    // A pause between two attempts goes through retryWait (@ashara/shared): a run whose clock is
+    // simulated answers it without a host timer, which there moves no clock and stalls the run. A
+    // wait on something real (another transaction, a server's teardown, a throttle a client must
+    // feel) keeps `// eslint-disable-next-line no-restricted-syntax -- real wait: <why>`.
+    // Blind spots: a timer reached through another name or a member (`timers.setTimeout`), a
+    // promise executor with a body block (`new Promise((r) => { setTimeout(r, ms); })`), and a
+    // retry loop that waits on something other than a timer.
+    selector: [
+      "NewExpression[callee.name='Promise'] > ArrowFunctionExpression[body.type='CallExpression'][body.callee.name='setTimeout'][body.arguments.0.type='Identifier']",
+      "ImportDeclaration:matches([source.value='node:timers/promises'], [source.value='timers/promises'])",
+    ].join(", "),
+    message:
+      "Raw wait in production source. A pause between attempts goes through retryWait (@ashara/shared), which a simulated run answers without a host timer; a wait on something real keeps `// eslint-disable-next-line no-restricted-syntax -- real wait: <why>`.",
+  },
 ];
 
 // A test that waits a fixed time for something to happen is slow whenever the thing is quick and
@@ -126,9 +141,9 @@ const PRODUCTION_SYNTAX = [
 // itself what the test judges keeps `// eslint-disable-next-line no-restricted-syntax -- <why>`.
 // Blind spots: a duration held in a variable or a constant (`setTimeout(r, WAIT_MS)`), a callback
 // with a body block (`setTimeout(() => { resolve(); }, 1500)`), a timer
-// reached through a member (`timers.setTimeout`) or another name, a wait under 500 ms repeated in a
+// reached through a member (`timers.setTimeout`) or another name, a wait under 100 ms repeated in a
 // loop, and a busy-wait on `Date.now()`.
-const FIXED_WAIT_MS = 500;
+const FIXED_WAIT_MS = 100;
 const TEST_SYNTAX = [
   {
     // `setTimeout(resolve, ms)` and `setTimeout(() => resolve(), ms)` are waits;

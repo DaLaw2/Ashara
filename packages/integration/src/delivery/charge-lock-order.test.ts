@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { adaptWorkItemRepo, createReplanStore, ProjectHaltRepository, releaseClearedBlocks, WorkItemRowRepository } from "@ashara/delivery";
 import type { ReplanStore, StoredBlockedReason } from "@ashara/delivery";
-import { createLogger, parseWorkItemId, systemClock } from "@ashara/shared";
+import { createLogger, observeRetryWaits, parseWorkItemId, systemClock } from "@ashara/shared";
 import type { ProjectId } from "@ashara/shared";
 import { memoryStepContainment, recordingLogger } from "@ashara/shared/testing";
 import { replanStoreSuite } from "../server/replan-store-suite.js";
@@ -30,13 +30,17 @@ const { plannedProject, itemsOf } = suite;
 // Each poll is one query; the bound only ends a run whose transaction never reaches the lock.
 const POLL_BOUND = 20_000;
 let root = "";
+// The lock order is what these tests judge, never the length of the unread main's retry pauses.
+let restoreRetryWaits: () => void = () => {};
 
 beforeAll(async () => {
+  restoreRetryWaits = observeRetryWaits(() => new Promise((resolve) => setImmediate(resolve)));
   root = await realpath(await mkdtemp(join(tmpdir(), "ashara-charge-lock-order-")));
 });
 
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });
+  restoreRetryWaits();
 });
 
 /** The held transaction ended before it held what it was to hold. */

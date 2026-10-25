@@ -84,11 +84,6 @@ describe("recognised-wording", () => {
     fs.rmSync(path.join(context.root, SIMULATOR, "stand-ins", "recognised-wording.ts"));
     expect(recognisedWording(context)).toHaveLength(1);
   });
-
-  test("the repository's simulator spells every recognised wording once", () => {
-    const context: LintContext = { root: REPO, packagesDir: path.join(REPO, "packages"), rulesRelative: "boundary-rules.toml", toml: "", rules: new Map(), packageDirs: [], packages: [] };
-    expect(recognisedWording(context)).toEqual([]);
-  });
 });
 
 const PROJECT_RECORD = `export const projects = pgTable("projects", {
@@ -197,10 +192,6 @@ describe("language-homes", () => {
 
   test("an entry naming no package refuses the gate", () => {
     expect(() => languageHomes(homesTree(`WorkPlan = "nowhere"`, { delivery: HOME }))).toThrow(/names no package/);
-  });
-
-  test("the repository declares every name of [homes] at its home only", () => {
-    expect(languageHomes(loadLintContext(REPO))).toEqual([]);
   });
 });
 

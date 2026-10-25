@@ -126,6 +126,9 @@ function buildDeps(
 // Tests
 // ---------------------------------------------------------------------------
 
+/** How long a task waits for the other of its batch to start: elapsed only when dispatch is serial. */
+const SERIAL_DISPATCH_BOUND_MS = 5_000;
+
 const cycleTallies: Array<Parameters<CoreLoopDeps["loop"]["cycleLog"]["emit"]>[0]> = [];
 
 beforeEach(() => {
@@ -144,12 +147,20 @@ describe("CoreLoop batch dispatch parallelism", () => {
     // concurrent dispatch. A serial loop would show task-B starting AFTER
     // task-A finishes; parallel dispatch shows them overlapping.
     const timeline: Array<{ taskId: string; event: "start" | "end"; ts: number }> = [];
+    let started = 0;
+    let bothStarted: () => void = () => {};
+    const overlap = new Promise<void>((resolve) => {
+      bothStarted = resolve;
+    });
 
     mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
       const taskId = task.id;
       timeline.push({ taskId, event: "start", ts: Date.now() });
-      // Simulate meaningful async work so the overlap window is observable
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (++started === 2) bothStarted();
+      // Each task stays open until the other has started. A serial loop never starts the second
+      // while the first is open, so the first ends at the bound and the overlap check below fails.
+      let bound: NodeJS.Timeout | undefined;
+      await Promise.race([overlap, new Promise((resolve) => (bound = setTimeout(resolve, SERIAL_DISPATCH_BOUND_MS)))]).finally(() => clearTimeout(bound));
       timeline.push({ taskId, event: "end", ts: Date.now() });
       return { taskId, status: "completed" as const, detail: "ok" };
     });

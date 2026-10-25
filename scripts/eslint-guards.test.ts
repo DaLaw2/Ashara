@@ -19,6 +19,7 @@ const LOG_EVENT_NOT_LITERAL = "Log event name is not a literal";
 const LOG_EVENT_MALFORMED = "Log event name `";
 const DELIVERY_FILE = join(REPO, "packages", "delivery", "src", "planted.ts");
 const FIXED_WAIT = "Fixed wait";
+const RAW_WAIT = "Raw wait in production source";
 const HAND_BUILT_DEPS = "Hand-built CoreLoopDeps";
 const COMPOSE_SOURCE = "Reading a compose module's source text";
 const INTEGRATION_TEST_FILE = join(REPO, "packages", "integration", "src", "server", "planted.test.ts");
@@ -37,7 +38,7 @@ async function guardsOf(code: string, filePath = PRODUCTION_FILE): Promise<strin
     if (message.ruleId === ASSERTION) return ASSERTION;
     if (message.ruleId === "no-restricted-imports" && message.message.includes(REQUEUE_UNREAD)) return REQUEUE_UNREAD;
     if (message.ruleId === "no-restricted-properties" && message.message.includes(CHARGE_UNLOCKED)) return CHARGE_UNLOCKED;
-    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED, FIXED_WAIT, HAND_BUILT_DEPS, COMPOSE_SOURCE].find((prefix) => message.message.startsWith(prefix));
+    const guard = [SWALLOWED, IDENTITY, JSON_PARSE, BARE_ERROR, CATCH_CONTINUES, UNARGUED_DISABLE, LOG_ERROR, LOG_EVENT_NOT_LITERAL, LOG_EVENT_MALFORMED, FIXED_WAIT, RAW_WAIT, HAND_BUILT_DEPS, COMPOSE_SOURCE].find((prefix) => message.message.startsWith(prefix));
     return guard ?? `${message.ruleId ?? "parse"}: ${message.message}`;
   });
 }
@@ -158,19 +159,50 @@ describe("eslint guards fire on planted instances", () => {
   test.each([
     "await new Promise((resolve) => setTimeout(resolve, 1500));",
     "await new Promise((r) => setTimeout(r, 500));",
+    "await new Promise((done) => setTimeout(done, 300));",
+    "await new Promise((r) => setTimeout(r, 200));",
     "await new Promise((resolve) => setTimeout(() => resolve(), 1_000));",
     "await sleep(2000);",
+    "await sleep(100);",
   ])("a fixed wait in a test: %s", async (line) => {
     const code = `import { setTimeout as sleep } from "node:timers/promises";\nexport async function planted(): Promise<void> {\n  ${line}\n}\n`;
     expect(await guardsOf(code, TEST_FILE)).toEqual([FIXED_WAIT]);
   });
 
   test.each([
-    "await new Promise((r) => setTimeout(r, 200));",
+    "await new Promise((r) => setTimeout(r, 99));",
     "await new Promise((_, reject) => setTimeout(() => reject(new Timeout()), 5000));",
   ])("a short wait or a bound on one in a test passes: %s", async (line) => {
     const code = `class Timeout extends Error {}\nexport async function planted(): Promise<void> {\n  ${line}\n}\n`;
     expect(await guardsOf(code, TEST_FILE)).toEqual([]);
+  });
+
+  test.each([
+    "await new Promise((resolve) => setTimeout(resolve, wait));",
+    "await new Promise((r) => setTimeout(r, 1000));",
+  ])("a raw wait in production source: %s", async (line) => {
+    const code = `export async function planted(wait: number): Promise<void> {\n  ${line}\n}\n`;
+    expect(await guardsOf(code)).toEqual([RAW_WAIT]);
+  });
+
+  test.each(["node:timers/promises", "timers/promises"])("an import of %s in production source", async (specifier) => {
+    const code = `import { setTimeout as sleep } from "${specifier}";\nexport async function planted(wait: number): Promise<void> {\n  await sleep(wait);\n}\n`;
+    expect(await guardsOf(code)).toEqual([RAW_WAIT]);
+  });
+
+  test("a pause through retryWait, a timer that bounds or ends something, and an argued real wait pass in production source", async () => {
+    const code = [
+      'import { retryWait } from "@ashara/shared";',
+      "export async function planted(wait: number, signal: AbortSignal): Promise<void> {",
+      "  await retryWait(wait);",
+      "  const timer = setTimeout(() => signal.dispatchEvent(new Event(\"abort\")), wait);",
+      "  clearTimeout(timer);",
+      "  // eslint-disable-next-line no-restricted-syntax -- real wait: planted, a server must end its sessions first",
+      "  await new Promise((resolve) => setTimeout(resolve, wait));",
+      "}",
+      "",
+    ].join("\n");
+    expect(await guardsOf(code)).toEqual([]);
   });
 
   test("a typed error class is not a bare Error", async () => {

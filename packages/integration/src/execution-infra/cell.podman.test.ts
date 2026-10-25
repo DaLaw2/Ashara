@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
   CellExecFailed,
@@ -291,8 +291,8 @@ describe("cell on real podman", () => {
       expect(left.stdout).not.toContain("sleep 30");
 
       const running = cell.exec(["sleep", "20"], { signal: new AbortController().signal, timeoutSeconds: 30 }).catch((e: unknown) => e);
-      // eslint-disable-next-line no-restricted-syntax -- the exec's process must be running when the cell is removed and nothing reports when it starts; a poll for the process would replace this wait
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // The exec's process must be running when the cell is removed, and nothing reports when it starts: poll the cell for it.
+      await vi.waitFor(async () => expect((await run("podman", ["top", cell.id, "args"])).stdout).toMatch(/^sleep 20 *$/m), { timeout: 15_000, interval: 50 });
       await run("podman", ["rm", "-f", "-t", "0", cell.id]);
       const removed = await running;
       expect(removed).toBeInstanceOf(CellExecFailed);

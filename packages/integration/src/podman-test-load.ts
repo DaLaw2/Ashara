@@ -30,7 +30,7 @@ export const PODMAN_TEST_FILES = [
 /**
  * Podman test files that run at once, whatever --maxWorkers the run is given; the p95s below were
  * measured with this bound.
- * @testseam vitest.config.mts sets it on the podman project
+ * @testseam vitest.config.mts sets it on the podman project; podman-test-load.test.ts checks it there
  */
 export const PODMAN_MAX_WORKERS = 4;
 

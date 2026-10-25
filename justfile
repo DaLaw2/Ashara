@@ -73,17 +73,13 @@ typecheck-full:
 test-images:
     timeout 1200 npx tsx packages/integration/src/test-images-pull.ts
 
-# Bounded: SIGTERM after 20 minutes, which the cell-leak guard (vitest.config.mts globalSetup)
-# answers by removing the run's cells before vitest exits; SIGKILL only if the run is still alive
-# 150 s later. That grace outlasts the guard's signal-time removal at its worst, one podman listing
-# and one podman rm, each bounded by cell-leak-guard.ts PODMAN_TIMEOUT_MS: a SIGKILL inside it would
-# cut the listing short and leave the cells to the next run's reaper.
-#
-# timeout runs vitest in a process group of its own, which a terminal's Ctrl+C does not reach, so
-# this shell forwards SIGINT, SIGTERM and SIGHUP to that group (to timeout itself if it has not made
-# the group yet) and waits for it to end. `timeout --foreground` would let Ctrl+C through, but on
-# expiry it signals vitest alone and leaves its forks workers running.
-test: _test-db-ready
+# The whole suite, or the files its vitest arguments filter, bounded by a wall time derived from the
+# files vitest selects and the workers it runs them on (scripts/test-run.ts states the rule and the
+# stop past it); a run cut off by its bound exits 124 naming the bound and every test file it did not finish.
+# Example: just test
+#          just test -- --maxWorkers=2
+#          just test -- scripts/test-run
+test *ARGS: _test-db-ready
     #!/usr/bin/env bash
     set -u
     # Every temp file goes under the scratch root (scripts/scratch-root.ts: a tmpfs unless
@@ -91,24 +87,16 @@ test: _test-db-ready
     # store follows vitest.config.mts (useTestPodmanStore), so a direct `npx vitest` gets it too.
     scratch=$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts) || exit 1
     export TMPDIR="$scratch"
-    timeout -k 150 1200 npx vitest run &
-    run=$!
-    trap 'kill -INT -- "-$run" 2>/dev/null || kill -INT "$run"' INT
-    trap 'kill -TERM -- "-$run" 2>/dev/null || kill -TERM "$run"' TERM HUP
-    while :; do
-      wait "$run"
-      status=$?
-      kill -0 "$run" 2>/dev/null || exit "$status"
-    done
+    exec npx tsx scripts/test-run.ts {{ARGS}}
 
 # Runs only the test files a change against <base> can affect (scripts/affected-tests.ts states the
 # selection rules and their blind spots); `just test` stays the full suite the merge lane runs.
 # Every selected test file runs, however many: no bound trims the selection, and a large one says so.
 # Example: just test-affected origin/master --list
 #          just test-affected origin/master -- --maxWorkers=2
-# Bounded and signal-forwarding exactly as `test` is, for the same reasons; the wall bound is the
-# full suite's, so the largest selection, the whole suite, fits it. `--list` runs no test, so
-# it needs no test database.
+# Bounded as `test` is, by a wall time derived from the selection and the workers it runs on, so a
+# whole-suite selection gets the whole suite's bound. `--list` runs no test, so it needs no test
+# database.
 test-affected base *ARGS:
     #!/usr/bin/env bash
     set -u
@@ -122,15 +110,7 @@ test-affected base *ARGS:
     # ASHARA_SCRATCH_ROOT names another), or the recipe stops naming why it cannot.
     scratch=$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts) || exit 1
     export TMPDIR="$scratch"
-    timeout -k 150 1200 npx tsx scripts/affected-tests.ts {{base}} {{ARGS}} &
-    run=$!
-    trap 'kill -INT -- "-$run" 2>/dev/null || kill -INT "$run"' INT
-    trap 'kill -TERM -- "-$run" 2>/dev/null || kill -TERM "$run"' TERM HUP
-    while :; do
-      wait "$run"
-      status=$?
-      kill -0 "$run" 2>/dev/null || exit "$status"
-    done
+    exec npx tsx scripts/affected-tests.ts {{base}} {{ARGS}}
 
 # The lifecycle simulator's soak tier: consecutive seeds, each
 # on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default the test

@@ -13,6 +13,11 @@
  * those exports lack resolves to none, its reason kept for the guard that reads it; any other bare
  * specifier the module's own directory cannot resolve resolves from this checkout, whose
  * node_modules holds the types the checker needs.
+ *
+ * A program over every source of this checkout costs seconds to build and tens more to warm its
+ * checker, so a test run builds it in one test file only (WHOLE_TREE_TEST), which every test that
+ * reads it lives in: the vitest project of every other test file sets WHOLE_TREE_ENV to "refused",
+ * under which building it fails naming that file, and a run pays for it once.
  */
 
 import { createHash } from "node:crypto";
@@ -20,6 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { z } from "zod";
+import { WHOLE_TREE_ENV, WHOLE_TREE_TEST } from "../packages/integration/src/test-run-load.js";
 
 const CHECKOUT = path.resolve(import.meta.dirname, "..");
 const WORKSPACE_SPECIFIER = /^@ashara\/([a-z][a-z0-9-]*)(\/.*)?$/;
@@ -27,6 +33,8 @@ const WORKSPACE_SPECIFIER = /^@ashara\/([a-z][a-z0-9-]*)(\/.*)?$/;
 const KEPT_PROGRAMS = 2;
 /** The programs of one module kept at once, for the reads that come back to the same text. */
 const KEPT_SINGLES = 8;
+/** The programs with a guard's own declarations written beside a kept program's texts, kept at once. */
+const KEPT_OVERRIDDEN = 2;
 
 class ModuleProgramError extends Error {
   constructor(
@@ -35,6 +43,17 @@ class ModuleProgramError extends Error {
   ) {
     super(`module-program: ${subject}: ${reason}`);
     this.name = "ModuleProgramError";
+  }
+}
+
+/** A program over every source of this checkout, asked for where WHOLE_TREE_ENV refuses one. */
+class WholeTreeProgramRefused extends Error {
+  constructor(readonly sources: number) {
+    super(
+      `module-program: a program over all ${sources} sources of this checkout is refused here (${WHOLE_TREE_ENV}=refused): ` +
+        `a test run builds it once, in ${WHOLE_TREE_TEST}; a test that reads it belongs in that file`,
+    );
+    this.name = "WholeTreeProgramRefused";
   }
 }
 
@@ -121,7 +140,22 @@ function scriptKindOf(fileName: string): ts.ScriptKind {
   return ts.ScriptKind.TS;
 }
 
+/** This checkout's sources, listed once per process: the set a refused program would hold. */
+let checkoutSources: readonly string[] | undefined;
+
+/** Throws WholeTreeProgramRefused when WHOLE_TREE_ENV refuses a program and `texts` hold every source of this checkout. */
+function refuseWholeTree(root: string, texts: ReadonlyMap<string, string>): void {
+  const policy = process.env[WHOLE_TREE_ENV];
+  if (policy === undefined) return;
+  if (policy !== "refused") throw new ModuleProgramError(WHOLE_TREE_ENV, `is "${policy}"; it is either unset or "refused"`);
+  if (path.resolve(root) !== CHECKOUT) return;
+  checkoutSources ??= sourcePaths(CHECKOUT);
+  const sources = checkoutSources;
+  if (texts.size >= sources.length && sources.every((file) => texts.has(file))) throw new WholeTreeProgramRefused(sources.length);
+}
+
 function build(root: string, texts: ReadonlyMap<string, string>, oldProgram?: ts.Program): ModuleProgram {
+  refuseWholeTree(root, texts);
   const options = compilerOptionsOf(root);
   const base = ts.createCompilerHost(options, true);
   const resolveWorkspace = workspaceResolver(root);
@@ -215,6 +249,8 @@ interface KeptProgram {
 const kept: KeptProgram[] = [];
 /** The programs of one module each, kept apart so a read of a stray text never drops a program over many. */
 const singles: KeptProgram[] = [];
+/** The programs overriddenProgram built, kept apart so a guard's probe never drops the program it probes. */
+const overridden: KeptProgram[] = [];
 
 function contentKey(root: string, texts: ReadonlyMap<string, string>): string {
   const hash = createHash("sha1").update(root);
@@ -238,18 +274,21 @@ function keptOrBuilt(pool: KeptProgram[], size: number, key: string, make: () =>
 
 /**
  * The program over `texts` (each module's path to its text), with options and workspace packages
- * read under `root`; built once per set of texts and kept for the run.
+ * read under `root`; built once per set of texts and kept for the run. A new one reuses the source
+ * files it shares with the program of `root` asked for last, parsed and bound once.
  */
 export function moduleProgram(root: string, texts: ReadonlyMap<string, string>): ModuleProgram {
   const absolute = new Map([...texts].map(([file, text]) => [path.resolve(file), text]));
   const pool = absolute.size === 1 ? singles : kept;
-  return keptOrBuilt(pool, pool === singles ? KEPT_SINGLES : KEPT_PROGRAMS, contentKey(root, absolute), () => build(root, absolute));
+  const previous = [...pool].reverse().find((entry) => entry.built.root === root)?.built.program;
+  return keptOrBuilt(pool, pool === singles ? KEPT_SINGLES : KEPT_PROGRAMS, contentKey(root, absolute), () => build(root, absolute, previous));
 }
 
 /**
  * A program over `built`'s texts with `overrides` in place of (or beside) them, its unchanged files
  * reused from `built`: for a guard that asks the checker about a type it writes beside the source, as
- * an instantiation of two declarations over one set of type parameters. Built on each call, never kept.
+ * an instantiation of two declarations over one set of type parameters. Built once per set of texts
+ * and kept for the run, so a guard that runs again over an unchanged tree asks the same checker.
  */
 export function overriddenProgram(built: ModuleProgram, overrides: ReadonlyMap<string, string>): ModuleProgram {
   const texts = new Map<string, string>();
@@ -259,7 +298,7 @@ export function overriddenProgram(built: ModuleProgram, overrides: ReadonlyMap<s
     texts.set(file, source.text);
   }
   for (const [file, text] of overrides) texts.set(path.resolve(file), text);
-  return build(built.root, texts, built.program);
+  return keptOrBuilt(overridden, KEPT_OVERRIDDEN, contentKey(built.root, texts), () => build(built.root, texts, built.program));
 }
 
 /** The program over `texts`, with this checkout's options and workspace packages. */
@@ -271,6 +310,7 @@ export function checkoutProgram(texts: ReadonlyMap<string, string>): ModuleProgr
 export function forgetPrograms(): void {
   kept.length = 0;
   singles.length = 0;
+  overridden.length = 0;
   diskSources.clear();
 }
 
@@ -298,13 +338,17 @@ function filesUnder(dir: string): string[] {
   });
 }
 
-/** Every source module of `root` (isCheckoutSource), each path to its text on disk. */
-function sourceTexts(root: string): Map<string, string> {
+/** Every source module of `root` (isCheckoutSource), by absolute path. */
+function sourcePaths(root: string): string[] {
   const packagesDir = path.join(root, "packages");
   const packages = fs.existsSync(packagesDir) ? fs.readdirSync(packagesDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()) : [];
   const dirs = [...packages.flatMap((entry) => PACKAGE_SOURCE_DIRS.map((dir) => path.join(packagesDir, entry.name, dir))), path.join(root, "scripts")];
-  const sources = dirs.flatMap(filesUnder).filter((file) => isCheckoutSource(path.relative(root, file).split(path.sep).join("/")));
-  return new Map(sources.map((file): [string, string] => [file, fs.readFileSync(file, "utf-8")]));
+  return dirs.flatMap(filesUnder).filter((file) => isCheckoutSource(path.relative(root, file).split(path.sep).join("/")));
+}
+
+/** Every source module of `root` (isCheckoutSource), each path to its text on disk. */
+function sourceTexts(root: string): Map<string, string> {
+  return new Map(sourcePaths(root).map((file): [string, string] => [file, fs.readFileSync(file, "utf-8")]));
 }
 
 /**

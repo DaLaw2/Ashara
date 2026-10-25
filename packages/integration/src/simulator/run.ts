@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-syntax -- real wait: only spaces the checks of a real run settling
 import { setTimeout as sleep } from "node:timers/promises";
 import { describeErrorChain } from "@ashara/shared";
 import type { LogRecord } from "@ashara/shared";

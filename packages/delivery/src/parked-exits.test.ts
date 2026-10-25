@@ -2,9 +2,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { DomainEvent } from "@ashara/shared";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, observeRetryWaits, parseProjectId } from "@ashara/shared";
 import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
 import type { WorkItemStatus } from "./work-item-language/work-item-status.js";
@@ -14,6 +14,15 @@ import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
 import { inertWorkItemRepo, itemLockOver } from "./domain/testing.js";
+
+// The retries are what these tests judge, never the length of their pauses: each pause ends on the next turn of the event loop.
+let restoreRetryWaits: () => void = () => {};
+beforeEach(() => {
+  restoreRetryWaits = observeRetryWaits(() => new Promise((resolve) => setImmediate(resolve)));
+});
+afterEach(() => {
+  restoreRetryWaits();
+});
 
 const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test");
 

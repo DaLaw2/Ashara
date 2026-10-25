@@ -13,6 +13,8 @@ export { systemClock } from "./clock.js";
 export type { ContendedWaitKind, ContendedWaitObserver } from "./contended-wait.js";
 export { contendedWait, observeContendedWaits } from "./contended-wait.js";
 
+export { observeRetryWaits, retryWait } from "./retry-wait.js";
+
 export type { StepContainment, StepFaultLedger, StepFaultStanding, StepFaulted } from "./contained-step.js";
 export { UnreadSubject, containEach, faultBackoffSeconds, readEach, uncontainedSteps } from "./contained-step.js";
 /** @testseam the simulator may not import it, so a cross-package test holds the simulator's report retry wait equal to it */

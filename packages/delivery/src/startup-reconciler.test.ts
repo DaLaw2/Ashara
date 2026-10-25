@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { createWorkItemId, observeRetryWaits, parseProjectId } from "@ashara/shared";
 import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { FailureRouter } from "./failure-router.js";
@@ -11,6 +11,15 @@ import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import { MERGE_RECORD_BACKOFF_MS } from "./execution/merge-record.js";
 import { reconcileWorkItemsOnStartup } from "./startup-reconciler.js";
 import { inertWorkItemRepo, itemLockOver } from "./testing.js";
+
+// The retries are what these tests judge, never the length of their pauses: each pause ends on the next turn of the event loop.
+let restoreRetryWaits: () => void = () => {};
+beforeEach(() => {
+  restoreRetryWaits = observeRetryWaits(() => new Promise((resolve) => setImmediate(resolve)));
+});
+afterEach(() => {
+  restoreRetryWaits();
+});
 
 type StartupReconcilerDeps = Parameters<typeof reconcileWorkItemsOnStartup>[0];
 

@@ -1,5 +1,5 @@
 import type { Logger } from "@ashara/shared";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, retryWait } from "@ashara/shared";
 import type { MergeKind } from "../work-item-language/blocked-reason.js";
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 
@@ -33,7 +33,7 @@ export async function recordMergeWithRetry(
         { taskId, mergeCommit, attempt },
         e,
       );
-      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
+      if (wait !== undefined) await retryWait(wait);
     }
   }
   return last;

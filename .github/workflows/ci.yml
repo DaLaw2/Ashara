@@ -100,9 +100,10 @@ jobs:
   test:
     name: Test suite
     runs-on: ubuntu-24.04
-    # A cap, not a budget: about twice the measured time of the whole suite plus its setup on this
-    # runner, so a hung run ends here while a suite that has merely grown still finishes.
-    timeout-minutes: 20
+    # A backstop, not a budget: the Test suite step's own cap plus the setup before it. The run stops
+    # itself at the bound scripts/test-run.ts derives from its files, naming every file it did not
+    # finish; scripts/test-run.test.ts holds both caps above that bound.
+    timeout-minutes: 50
 
     services:
       postgres:
@@ -173,12 +174,16 @@ jobs:
         run: npx tsx scripts/migrate.ts
 
       # The step exports TMPDIR from the scratch-root resolver as `just test` does (the suite's
-      # globalSetup pins it too); a runner without a tmpfs with room fails here naming why.
+      # globalSetup pins it too); a runner without a tmpfs with room fails here naming why. The suite
+      # runs through scripts/test-run.ts, as `just test` does, under the bound derived from its files
+      # and the workers named here (this runner's cores), and SIGKILL its grace later; this step's cap
+      # is above both.
       - name: Test suite
+        timeout-minutes: 30
         run: |
           TMPDIR="$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts)"
           export TMPDIR
-          npx vitest run --reporter=default --reporter=json --outputFile=vitest-results.json
+          npx tsx scripts/test-run.ts -- --maxWorkers=4 --reporter=default --reporter=json --outputFile=vitest-results.json
 
       # vitest exits non-zero on a failed test, a suite that fails to collect,
       # or zero test files, but exits 0 with skipped tests; this step closes that.

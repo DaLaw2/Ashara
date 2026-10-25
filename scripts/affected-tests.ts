@@ -12,7 +12,10 @@
  * whole-suite selection runs the full suite. A run that sheds selected tests is a weaker check, not a
  * faster one, so a selection of more test files than DEFAULT_SELECTION_CONFIG's largeSelection runs
  * whole and says in one line that it is large; a whole-suite run says it runs every test file. The
- * justfile recipe's wall bound is the full suite's, so the largest selection fits it. A selection
+ * run's wall bound is derived from the files it selects and the workers it runs them on
+ * (test-run.ts), so a whole-suite selection gets the whole suite's bound and a small one a small
+ * bound; a run that passes it fails naming the bound and the files it did not finish. The selection
+ * itself runs no test and is bounded by SELECTION_BOUND_MS. A selection
  * that comes to no test file for a change that touches source fails the run instead of passing it;
  * only a change every path of which a no-test-effect rule clears (or a deleted test file) runs
  * nothing and exits 0.
@@ -74,7 +77,7 @@
  *   itself is a whole-suite rule, its own imports reach just the tests that import them.
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,6 +85,8 @@ import { describeErrorChain } from "@ashara/shared";
 import { importReader } from "./import-targets.js";
 import { forgetPrograms, isCheckoutSource } from "./module-program.js";
 import { lockfileImpact, manifestImpact, parseLockfile, type DependencyImpact, type Lockfile } from "./lockfile-impact.js";
+import { SIMULATOR_DIR } from "./test-run-budget.js";
+import { runTests } from "./test-run.js";
 
 class AffectedTestsError extends Error {
   constructor(
@@ -136,11 +141,6 @@ const NO_TEST_EFFECT_RULES: readonly PathRule[] = [
   { pattern: /^\.github\//, reason: "the CI workflow, which runs the suite and is not run by it" },
   { pattern: /^knip\.json$/, reason: "read by knip in `just check`, never by a test" },
 ];
-
-/**
- * @testseam affected-tests.test.ts exercises it without running the CLI
- */
-export const SIMULATOR_DIR = "packages/integration/src/simulator/";
 
 const TEST_FILE_RE = /\.test\.ts$/;
 const SNAPSHOT_RE = /^(.*)\/__snapshots__\/([^/]+\.test\.ts)\.snap$/;
@@ -580,7 +580,8 @@ export async function repositorySources(root: string, revisions: Revisions): Pro
   const { createVitest } = await import("vitest/node");
   const vitest = await createVitest("test", { root, watch: false, run: true, reporters: [] });
   const relative = (abs: string): string => path.relative(root, abs).split(path.sep).join("/");
-  const allTests = [...new Set((await vitest.globTestSpecifications()).map((s) => relative(s.moduleId)))].sort();
+  const specs = await vitest.globTestSpecifications();
+  const allTests = [...new Set(specs.map((s) => relative(s.moduleId)))].sort();
   const files = git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]).split("\0").filter((f) => f !== "");
   const readAt = revisionReader(root);
   const readRevisions = (wanted: readonly string[], side: "base" | "head"): Map<string, string | undefined> => {
@@ -641,35 +642,26 @@ function parseCli(argv: readonly string[]): Cli {
   return { base, head, list, vitestArgs };
 }
 
-const VITEST_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "node_modules", "vitest", "vitest.mjs");
-
-function runVitest(root: string, files: readonly string[], extra: readonly string[]): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [VITEST_BIN, "run", ...extra, ...files.map((f) => path.join(root, f))], { cwd: root, stdio: "inherit" });
-    const forward = (signal: NodeJS.Signals): void => {
-      child.kill(signal);
-    };
-    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, forward);
-    child.on("error", (error) => {
-      reject(new AffectedTestsError("vitest run", describeErrorChain(error)));
-    });
-    child.on("exit", (code, signal) => {
-      // A run ended by a signal is a failed run, never a pass.
-      resolve(code ?? (signal === null ? 1 : 128));
-    });
-  });
-}
+/**
+ * How long the selection may take before it runs any test: git reads, vitest's module graph and, for a
+ * dependency change, one TS program over the changed tree.
+ */
+const SELECTION_BOUND_MS = 600_000;
 
 async function main(): Promise<number> {
   const cli = parseCli(process.argv.slice(2));
   const root = process.cwd();
-  if (!fs.existsSync(VITEST_BIN)) throw new AffectedTestsError("vitest", `${VITEST_BIN} is missing; run npm ci`);
+  const overdue = setTimeout(() => {
+    console.error(`affected-tests: the selection did not finish within its bound of ${SELECTION_BOUND_MS / 1000} s, so no test ran`);
+    process.exit(124);
+  }, SELECTION_BOUND_MS);
   const { from, paths: changes } = changedPaths(root, cli.base, cli.head);
   const sources = await repositorySources(root, { base: from, head: cli.head });
   let selection: Selection;
   try {
     selection = await selectTests(changes, sources);
   } finally {
+    clearTimeout(overdue);
     await sources.close();
     forgetPrograms();
   }
@@ -684,12 +676,12 @@ async function main(): Promise<number> {
   }
   if (run.kind === "whole-suite") {
     console.log(run.notice);
-    return cli.list ? 0 : runVitest(root, [], cli.vitestArgs);
+    return cli.list ? 0 : runTests(root, [], cli.vitestArgs);
   }
   if (run.notice !== undefined) console.log(run.notice);
   console.log(`runs: ${run.tests.length} test files`);
   for (const t of run.tests) console.log(`  ${t}`);
-  return cli.list ? 0 : runVitest(root, run.tests, cli.vitestArgs);
+  return cli.list ? 0 : runTests(root, run.tests, cli.vitestArgs);
 }
 
 if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

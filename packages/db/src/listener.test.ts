@@ -1,4 +1,4 @@
-import { describe, test, expect, afterEach } from "vitest";
+import { describe, test, expect, afterEach, vi } from "vitest";
 import pg from "pg";
 import { z } from "zod";
 import { recordingLogger } from "@ashara/shared/testing";
@@ -71,9 +71,7 @@ describe("PG listener cleanup", () => {
     expect(listener.backendPid()).toBeNull();
     listener = null;
 
-    // end() resolves on socket close; give the backend a moment to exit.
-    await new Promise((r) => setTimeout(r, 200));
-
-    expect(await backendExists(pid)).toBe(false);
+    // end() resolves on socket close, before the backend has exited: poll until it has.
+    await vi.waitFor(async () => expect(await backendExists(pid)).toBe(false), { timeout: 5_000, interval: 10 });
   });
 });

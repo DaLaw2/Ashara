@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import { createVitest } from "vitest/node";
 import { PODMAN_TEST_FILES } from "./podman-test-load.js";
+import { WHOLE_TREE_PROJECT, WHOLE_TREE_TEST } from "./test-run-load.js";
+import { WholeTreeFirstSequencer } from "./test-sequencer.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const VITEST = path.join(ROOT, "node_modules", "vitest", "vitest.mjs");
@@ -38,7 +40,26 @@ describe("the vitest config", () => {
     const vitest = await createVitest("test", { root: ROOT, watch: false, run: true, reporters: [] });
     try {
       const includes = Object.fromEntries(vitest.projects.map((project) => [project.name, project.config.include]));
-      expect(includes).toEqual({ default: ["packages/*/src/**/*.test.ts", "scripts/**/*.test.ts"], podman: [...PODMAN_TEST_FILES] });
+      expect(includes).toEqual({ default: ["packages/*/src/**/*.test.ts", "scripts/**/*.test.ts"], "whole-tree": [WHOLE_TREE_TEST], podman: [...PODMAN_TEST_FILES] });
+    } finally {
+      await vitest.close();
+    }
+  }, 60_000);
+
+  test("starts the whole-tree file before every other file of its group, and the podman files after the rest", async () => {
+    const vitest = await createVitest("test", { root: ROOT, watch: false, run: true, reporters: [] });
+    try {
+      // The config loads its own copy of the module, so the class is matched by name, and the run's own sorts.
+      const Sequencer = vitest.config.sequence.sequencer;
+      expect(Sequencer.name).toBe(WholeTreeFirstSequencer.name);
+      const order = await new Sequencer(vitest).sort(await vitest.globTestSpecifications());
+      const projects = order.map((spec) => spec.project.name);
+      expect(projects[0]).toBe(WHOLE_TREE_PROJECT);
+      expect(path.relative(ROOT, order[0]?.moduleId ?? "")).toBe(WHOLE_TREE_TEST);
+      const firstPodman = projects.indexOf("podman");
+      expect(firstPodman).toBeGreaterThan(0);
+      expect(projects.slice(firstPodman).every((name) => name === "podman")).toBe(true);
+      expect(projects.slice(1, firstPodman).every((name) => name === "default")).toBe(true);
     } finally {
       await vitest.close();
     }

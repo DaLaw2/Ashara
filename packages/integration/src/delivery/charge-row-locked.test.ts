@@ -17,7 +17,7 @@ import {
   WorkItemRowRepository,
 } from "@ashara/delivery";
 import type { CoreLoopDeps, StoredBlockedReason } from "@ashara/delivery";
-import { createLogger, createWorkItemId, systemClock } from "@ashara/shared";
+import { createLogger, createWorkItemId, observeRetryWaits, systemClock } from "@ashara/shared";
 import type { DomainEvent, Logger, ProjectId, WorkItemId } from "@ashara/shared";
 import { memoryStepContainment, notExercised } from "@ashara/shared/testing";
 import { composedLoopOverTestDb } from "../loop-over-test-db.js";
@@ -36,8 +36,11 @@ const POLL_BOUND = 20_000;
 type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatch"]["dispatchService"]["execute"]>>;
 let db: Database;
 let root = "";
+// The charge after an unread main is what these tests judge, never the length of the read's retry pauses.
+let restoreRetryWaits: () => void = () => {};
 
 beforeAll(async () => {
+  restoreRetryWaits = observeRetryWaits(() => new Promise((resolve) => setImmediate(resolve)));
   vi.spyOn(console, "log").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   db = createDb(DATABASE_URL);
@@ -53,6 +56,7 @@ afterAll(async () => {
   await db.$client.end();
   await rm(root, { recursive: true, force: true });
   vi.restoreAllMocks();
+  restoreRetryWaits();
 });
 
 /** The owner's transaction ended before it held the task's row. */

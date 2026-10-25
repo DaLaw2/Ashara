@@ -34,8 +34,9 @@ const TEARDOWN_SHARE = 0.8;
 /**
  * What the guard's podman work needs at worst, at a run's end or on a signal: one listing and one
  * removal, each bounded by PODMAN_TIMEOUT_MS. vitest.config.mts's teardownTimeout gives the end-of-run
- * check at least this through TEARDOWN_SHARE, and `just test` waits at least this before its SIGKILL.
- * @testseam cell-leak-guard.test.ts checks vitest.config.mts and the justfile against it, podman-test-load.test.ts its per-call bound; the guard's own calls read PODMAN_TIMEOUT_MS
+ * check at least this through TEARDOWN_SHARE, and scripts/test-run.ts, which `just test` and `just
+ * test-affected` run vitest through, waits at least this before its SIGKILL.
+ * @testseam cell-leak-guard.test.ts checks vitest.config.mts against it, scripts/test-run.test.ts the bounded run's grace, podman-test-load.test.ts its per-call bound; the guard's own calls read PODMAN_TIMEOUT_MS
  */
 export const GUARD_PODMAN_BUDGET = { teardownShare: TEARDOWN_SHARE, podmanTimeoutMs: PODMAN_TIMEOUT_MS, worstCaseMs: 2 * PODMAN_TIMEOUT_MS } as const;
 

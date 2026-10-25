@@ -22,8 +22,10 @@ describe("createDb pool", () => {
       const first = await db.execute(sql`SELECT pg_backend_pid() AS pid`);
       const pid = PidRowSchema.parse(first.rows[0]).pid;
 
+      // The pool drops a client whose idle connection dies, and says so once the client has ended.
+      const dropped = new Promise<void>((resolve) => db.$client.once("remove", () => resolve()));
       await admin.query("SELECT pg_terminate_backend($1)", [pid]);
-      await new Promise((r) => setTimeout(r, 200));
+      await dropped;
 
       const second = await db.execute(sql`SELECT pg_backend_pid() AS pid`);
       expect(PidRowSchema.parse(second.rows[0]).pid).not.toBe(pid);

@@ -94,14 +94,16 @@ describe("the vitest scratch-root guard", () => {
   });
 
   test("every vitest run in the justfile and CI exports TMPDIR from the resolver first", () => {
-    // A justfile recipe starts at column 0; a CI step starts at its `- name:` line.
+    // A justfile recipe starts at column 0; a CI step starts at its `- name:` line. A recipe runs
+    // vitest itself or through the bounded runners that start it.
+    const runsTests = /^\s+(?:exec )?npx (?:vitest run|tsx scripts\/(?:test-run|affected-tests)\.ts)/m;
     const chunks = [
       ...readFileSync("justfile", "utf8").split(/\n(?=\S)/),
       ...readFileSync(".github/workflows/ci.yml", "utf8").split(/\n(?=\s*- name: )/),
-    ].filter((chunk) => chunk.includes("npx vitest run"));
-    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    ].filter((chunk) => runsTests.test(chunk));
+    expect(chunks.length).toBeGreaterThanOrEqual(3);
     for (const chunk of chunks) {
-      expect(chunk.slice(0, chunk.indexOf("npx vitest run"))).toMatch(/scripts\/scratch-root\.ts\)"?(?: \|\| exit 1)?\n\s*export TMPDIR\b/);
+      expect(chunk.slice(0, chunk.search(runsTests))).toMatch(/scripts\/scratch-root\.ts\)"?(?: \|\| exit 1)?\n\s*export TMPDIR\b/);
     }
   });
 

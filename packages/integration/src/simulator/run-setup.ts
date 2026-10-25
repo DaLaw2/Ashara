@@ -7,7 +7,7 @@ import { loadBaseCell } from "@ashara/execution-infra";
 import { SecretRepository, SecretStore } from "@ashara/security";
 import { clientAccessCodeSecretName, createKeyFile, loadMasterKey } from "@ashara/security";
 import type { MasterKey } from "@ashara/security";
-import { describeErrorChain, observeContendedWaits } from "@ashara/shared";
+import { describeErrorChain, observeContendedWaits, observeRetryWaits } from "@ashara/shared";
 import { AdmissionLedger } from "./admissions.js";
 import { drawCorrection } from "./correction-draws.js";
 import type { CorrectionDraw } from "./correction-draws.js";
@@ -331,6 +331,9 @@ export async function setProcessWide(
   const restoreIds = seededIds(options.seed);
   const restoreEnv = simulatedEnvironment(workdir, draws.capUsd);
   const restoreWaits = observeContendedWaits(world.interleaver.contended);
+  // A retry's pause moves no simulated clock and only the task holding the turn runs, so a host
+  // timer there stalls the whole run; one turn of the event loop lets what is in flight land as it would.
+  const restoreRetryWaits = observeRetryWaits(() => new Promise((resolve) => setImmediate(resolve)));
   const restoreCode = world.planted?.code?.() ?? null;
   const restoreSweeps = observeAcceptanceSweeps((sweep) => {
     state.coverage.sweeps.add(sweep);
@@ -341,6 +344,7 @@ export async function setProcessWide(
     restore: () => {
       restoreCode?.();
       restoreSweeps();
+      restoreRetryWaits();
       restoreWaits();
       restoreEnv();
       restoreIds();

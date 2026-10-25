@@ -21,6 +21,8 @@ import type { FinalizeDeps, PostMergeVerdict } from "./finalize.js";
 // ---------------------------------------------------------------------------
 
 const execFileAsync = promisify(execFile);
+/** How long a second finalize may take to queue on the checkout's lock: elapsed only when it never queues. */
+const UNQUEUED_BOUND_MS = 5_000;
 const tempDirs: string[] = [];
 /** The workdir base of every target here: finalize initialises a target only inside it. */
 const WORKDIR_BASE = await mkdtemp(join(tmpdir(), "ashara-finalize-"));
@@ -117,6 +119,21 @@ describe("finalize serialises per target checkout", () => {
       1,
     );
     await aVerifying;
+    // B's arrival at the checkout's lock, and whether what it waits on there has let it through.
+    let bQueued: () => void = () => {};
+    const bWaiting = new Promise<void>((done) => {
+      bQueued = done;
+    });
+    let bLetThrough = false;
+    const restoreWaits = observeContendedWaits((kind, waiting) => {
+      if (kind === "target-checkout") {
+        void waiting.then(() => {
+          bLetThrough = true;
+        });
+        bQueued();
+      }
+      return waiting;
+    });
     const finalizeB = finalizeSuccess(
       deps(async () => {
         order.push("b:verify");
@@ -125,10 +142,15 @@ describe("finalize serialises per target checkout", () => {
       b,
       alias,
       1,
-    );
+    ).finally(restoreWaits);
 
-    // B is waiting: given time to run, it neither reaches its checks nor touches A's staged merge.
-    await new Promise((done) => setTimeout(done, 300));
+    // B waits behind A: a turn of the event loop after it queued its wait is still pending, and it has
+    // neither reached its checks nor touched A's staged merge. A lock that never queues it lets it
+    // through at once, and the bound lets it run on until the checks below fail.
+    let bound: NodeJS.Timeout | undefined;
+    await Promise.race([bWaiting, new Promise((done) => (bound = setTimeout(done, UNQUEUED_BOUND_MS)))]).finally(() => clearTimeout(bound));
+    await new Promise((done) => setImmediate(done));
+    expect(bLetThrough).toBe(false);
     expect(order).toEqual(["a:verify"]);
     expect(await hasMergeHead(target)).toBe(true);
 

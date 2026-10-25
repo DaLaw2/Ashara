@@ -432,7 +432,8 @@ describe("PodmanSubstrate argv", () => {
       if (request.args[0] === "run") return ok(ID);
       active++;
       most = Math.max(most, active);
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Every exec the cell let through at once is running by the next turn of the event loop.
+      await new Promise((resolve) => setImmediate(resolve));
       active--;
       return ran("", 0);
     };
@@ -457,9 +458,14 @@ describe("PodmanSubstrate argv", () => {
   it("hands podman exec its signal, reports its abort as an interruption, never a result, and refuses the cell's later execs", async () => {
     const shutdown = new AbortController();
     const requests: ProcessRequest[] = [];
+    let execReached: () => void = () => {};
+    const execRunning = new Promise<void>((done) => {
+      execReached = done;
+    });
     const runner = async (request: ProcessRequest): Promise<ProcessResult> => {
       requests.push(request);
       if (request.args[0] !== "exec") return ok(ID);
+      execReached();
       // A podman exec the runner kills on abort: it ends by the signal, its wrapper never reporting.
       return new Promise((resolve) => request.signal?.addEventListener("abort", () => resolve({ ...ok("", null), signal: "SIGKILL", statusReport: "" }), { once: true }));
     };
@@ -468,7 +474,7 @@ describe("PodmanSubstrate argv", () => {
     const running = cell.exec(["sleep", "3600"], { signal: shutdown.signal, timeoutSeconds: 3600 }).catch((e: unknown) => e);
     // A queued exec never starts: the abort reaches it before its turn.
     const queued = cell.exec(["true"], { signal: shutdown.signal, timeoutSeconds: 1 }).catch((e: unknown) => e);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await execRunning;
     expect(requests[1]?.signal).toBe(shutdown.signal);
     shutdown.abort(new Error("SIGTERM"));
     expect(await running).toBeInstanceOf(CellExecInterrupted);
@@ -585,12 +591,22 @@ describe("the sweep, over a fake process table", () => {
     await writeFile(join(root, "2", "stat"), "2 (sleep) S 1 2 1 0 -1\n");
     await mkdir(join(root, LINGERING_PID));
     await writeFile(join(root, LINGERING_PID, "stat"), `${LINGERING_PID} (dd) D 1 ${LINGERING_PID} ${LINGERING_PID} 0 -1\n`);
-    const lingerMs = 1500;
+    // The sweep reads the table in a loop without pausing, so a linger of this length is many reads of the process still listed.
+    const lingerMs = 250;
     const startedAt = Date.now();
+    let endedWhileListed = false;
+    let listed = true;
+    const sweep = sweepExit(root).finally(() => {
+      endedWhileListed = listed;
+    });
     const [exit] = await Promise.all([
-      sweepExit(root),
-      new Promise((resolve) => setTimeout(resolve, lingerMs)).then(() => rm(join(root, LINGERING_PID), { recursive: true })),
+      sweep,
+      new Promise((resolve) => setTimeout(resolve, lingerMs)).then(() => {
+        listed = false;
+        return rm(join(root, LINGERING_PID), { recursive: true });
+      }),
     ]);
+    expect(endedWhileListed).toBe(false);
     expect(exit).toBe(0);
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(lingerMs);
   });

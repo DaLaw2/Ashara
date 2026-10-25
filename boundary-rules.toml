@@ -328,7 +328,7 @@ names.organization = ["ORGANIZATION_MODEL_SCHEMAS"]
 names.quality = ["AcceptanceSweep", "EXECUTION_STATUSES", "QUALITY_MODEL_SCHEMAS", "observeAcceptanceSweeps"]
 names.security = ["MasterKey", "SecretRepository", "SecretStore", "clientAccessCodeSecretName", "createKeyFile", "loadMasterKey"]
 names.server = ["AsharaInstance", "AsharaPorts", "composeAshara"]
-names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "LogRecord", "LogSink", "contendedWait", "describeErrorChain", "logRecordSchema", "observeContendedWaits", "parseJson"]
+names.shared = ["Clock", "ContendedWaitKind", "ContendedWaitObserver", "JsonParseFailed", "LogRecord", "LogSink", "contendedWait", "describeErrorChain", "logRecordSchema", "observeContendedWaits", "observeRetryWaits", "parseJson"]
 names.workplace = ["ATTEMPT_TERMINALS", "CHECK_MISSING_EXIT", "HoldEvidence", "offeredToolSchemas"]
 # A stand-in model answers the product's model calls, so one that imports the rule judging
 # its answer (a parser, a schema, a classifier) can answer exactly what the rule accepts, and the

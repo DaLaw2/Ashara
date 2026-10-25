@@ -1,4 +1,5 @@
 import type { Logger } from "@ashara/shared";
+import { retryWait } from "@ashara/shared";
 import type { WorkItem } from "./domain/index.js";
 import { requeueWorkItem, resumeOnAnswer, unblockWorkItem } from "./domain/index.js";
 import { InvalidTargetProjectPath } from "./acl/execution-infra-acl.js";
@@ -81,7 +82,7 @@ export async function readMainForMerge(deps: MainReadDeps, item: WorkItem, waits
       last = e;
       const wait = e instanceof InvalidTargetProjectPath ? undefined : waitsMs[tried - 1];
       deps.logger.warn("delivery.main-unread", `main could not be read for its merge on attempt ${tried} of ${attempts}`, { taskId: item.id, attempt: tried, attempts }, e);
-      if (wait !== undefined) await new Promise((resolve) => setTimeout(resolve, wait));
+      if (wait !== undefined) await retryWait(wait);
     }
   }
   const fault: MainUnreadFault = last instanceof InvalidTargetProjectPath ? "configuration" : "transient";

@@ -1,4 +1,12 @@
 /**
+ * Every test that reads a TS program over a whole tree: this checkout's (the lints judged against
+ * the repository as it stands, and against it with copies restored) and the boundary probes' scratch
+ * copies of it. Such a program costs seconds to build and tens more to warm its checker, so they
+ * live in this one file, which vitest's whole-tree project runs in one worker: each tree's program
+ * is built once for the run and every test of it asks the same checker (module-program.ts keeps it),
+ * and the trees are read one after another, so no two of them are held at once. Every other test
+ * file runs where module-program.ts refuses to build this checkout's program.
+ *
  * Negative probes for boundary-rules.toml (the context map), run against the real checker.
  *
  * The map below is the expected side: for every package it states the packages it may import, the
@@ -15,8 +23,8 @@
  * file outside the one module that holds it (by name and through a namespace), Evaluation's reads of
  * a repository class, of a context's table object and of a context's table in raw SQL (no builder may
  * import Evaluation: its empty importers are probed with every other package's), plus one permitted import
- * per allowed edge, runs scripts/check-boundaries.ts there and asserts it reports exactly the
- * violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
+ * per allowed edge, runs scripts/check-boundaries.ts's check there in this process and asserts it
+ * reports exactly the violations the map predicts. So a rule that stops firing fails, and so does an edge widened or
  * narrowed in the rules file without changing the map here.
  *
  * MODULES does the same inside each package that declares internal modules: one type-only relative
@@ -31,7 +39,6 @@
  * such a read imports no table object for the checker to refuse.
  */
 
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +47,96 @@ import { PgTable } from "drizzle-orm/pg-core";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import * as dbRoot from "@ashara/db";
+import { boundaryReport } from "./check-boundaries.js";
+import { run as languageHomes } from "./lints/language-homes.js";
+import { loadLintContext, type LintContext } from "./lints/lint.js";
+import { run as mirroredTypesOfRepository } from "./lints/mirrored-types.js";
+import { run as recognisedWording } from "./lints/recognised-wording.js";
+import { forgetPrograms } from "./module-program.js";
+import { findStackLiterals, parseStackLiteralRules } from "./stack-literals.js";
 import { DB_OWNER, SHARED_OWNER, declaredTables, parseTableOwnershipRules } from "./table-ownership.js";
+
+const REPO = path.resolve(import.meta.dirname, "..");
+
+// This checkout's program: built by the first test that reads it, asked by the rest, and let go
+// before the probes build their scratch trees' programs.
+describe("this checkout, read through its one program", () => {
+  afterAll(() => {
+    forgetPrograms();
+  });
+
+  describe("recognised-wording", () => {
+    test("the repository's simulator spells every recognised wording once", () => {
+      const context: LintContext = { root: REPO, packagesDir: path.join(REPO, "packages"), rulesRelative: "boundary-rules.toml", toml: "", rules: new Map(), packageDirs: [], packages: [] };
+      expect(recognisedWording(context)).toEqual([]);
+    });
+  });
+
+  describe("language-homes", () => {
+    test("the repository declares every name of [homes] at its home only", () => {
+      expect(languageHomes(loadLintContext(REPO))).toEqual([]);
+    });
+  });
+
+  describe("findStackLiterals", () => {
+    test("the simulator product's stack-neutral names stay clean", () => {
+      const rules = parseStackLiteralRules(fs.readFileSync(path.join(REPO, "boundary-rules.toml"), "utf-8"), "boundary-rules.toml");
+      const tokens = [...rules.tokens.values()].flat();
+      const file = path.join(REPO, "packages", "integration", "src", "simulator", "product.ts");
+      expect(findStackLiterals(fs.readFileSync(file, "utf-8"), file, tokens)).toEqual([]);
+    });
+  });
+
+  describe("mirrored-types", () => {
+    test("the repository declares each type of its production source once, or names the pair with why", () => {
+      expect(mirroredTypesOfRepository(loadLintContext(REPO))).toEqual([]);
+    });
+
+    /** The repository's scan with `files` (src-relative, by package) added to it. */
+    function withRestored(added: Readonly<Record<string, Readonly<Record<string, string>>>>): LintContext {
+      const context = loadLintContext(REPO);
+      const packages = context.packages.map((pkg) => {
+        const files = added[pkg.name];
+        if (files === undefined) return pkg;
+        const contents = new Map(pkg.contents);
+        for (const [file, text] of Object.entries(files)) contents.set(path.join(pkg.root, "src", file), text);
+        return { ...pkg, contents };
+      });
+      return { ...context, packages };
+    }
+
+    test("restoring copies of the types and joins the repository now declares once fails the repository", () => {
+      const copies = [
+        "interface BlockingReviewRow { readonly times: number; readonly problems: readonly string[] }",
+        'type SweptTerminal = { readonly kind: "stop"; readonly stopId: string } | { readonly kind: "halt"; readonly blockId: string };',
+        'interface SweepCheckRead { readonly taskId: string; readonly name: string; readonly command: string; readonly outcome: "passed" | "failed" | "not-run" }',
+        "interface SweepOutcomeRead {",
+        "  readonly checkedTasks: readonly string[];",
+        "  readonly uncheckedTasks: readonly string[];",
+        '  readonly checks: { readonly kind: "unrecorded" } | { readonly kind: "recorded"; readonly checks: readonly SweepCheckRead[] };',
+        "}",
+      ].join("\n");
+      const store = 'import type { createDb } from "@ashara/db";\ntype Db = ReturnType<typeof createDb>;\nexport const handle = (db: Db): Db => db;\n';
+      const report = [
+        'import type { lastReportGuaranteeVerdictsOf } from "@ashara/engagement";',
+        'import { sweepOrphanedWorktrees } from "@ashara/execution-infra";',
+        "export type RestoredLastReport = Awaited<ReturnType<typeof lastReportGuaranteeVerdictsOf>>;",
+        "export const sweep = (base: string): ReturnType<typeof sweepOrphanedWorktrees> => sweepOrphanedWorktrees(base, async () => []);",
+      ].join("\n");
+      const violations = mirroredTypesOfRepository(withRestored({ engagement: { "restored-copies.ts": copies }, server: { "restored-store.ts": store }, evaluation: { "restored-report.ts": report } }));
+      const reasons = violations.map((v) => v.reason);
+      expect(reasons).toContainEqual(expect.stringMatching(/^one name declared more than once: BlockingReviewRow at packages\/engagement\/src\/restored-copies\.ts:1, BlockingReviewRow at packages\/quality\/src\/task-checks\.ts/));
+      expect(reasons).toContainEqual(expect.stringMatching(/^one name declared more than once: SweptTerminal at packages\/engagement\/src\/restored-copies\.ts:2, SweptTerminal at packages\/quality\/src\/guarantee-verdict\.ts/));
+      expect(reasons).toContainEqual(expect.stringMatching(/^one type declared under more than one name: SweepOutcomeRead at packages\/engagement\/src\/restored-copies\.ts:4, SweepOutcome at packages\/quality\/src\/guarantee-verdict\.ts/));
+      const joins = violations.filter((v) => v.reason.startsWith("a type written over")).map((v) => `${v.file}:${v.line} ${v.reason}`);
+      expect(joins).toEqual([
+        expect.stringMatching(/^packages\/evaluation\/src\/restored-report\.ts:3 a type written over what lastReportGuaranteeVerdictsOf, declared in packages\/engagement\/src\//),
+        expect.stringMatching(/^packages\/evaluation\/src\/restored-report\.ts:4 a type written over what sweepOrphanedWorktrees, declared in packages\/execution-infra\/src\//),
+        expect.stringMatching(/^packages\/server\/src\/restored-store\.ts:2 a type written over what createDb, declared in packages\/db\/src\//),
+      ]);
+    });
+  });
+});
 
 interface PackageMap {
   /** Packages this one may import; "*" for the composition root. */
@@ -690,7 +786,6 @@ const BOUNDS_TABLE_PROBES = [
   },
 ];
 
-const REPO = path.resolve(import.meta.dirname, "..");
 const PROBE_DIR = "src/__boundary_probe__";
 
 class ProbeTreeError extends Error {
@@ -791,7 +886,7 @@ function plannedProbes(packages: readonly string[]): PlannedProbe[] {
 
 function copyTree(packages: readonly string[], into: string): void {
   fs.mkdirSync(path.join(into, "scripts"), { recursive: true });
-  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/import-targets.ts", "scripts/module-program.ts", "scripts/optional-deps.ts", "scripts/predicate-copies.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts", "scripts/table-ownership.ts", "scripts/verification-split.ts"]) {
+  for (const file of ["boundary-rules.toml", "tsconfig.json", "scripts/check-boundaries.ts", "scripts/import-targets.ts", "scripts/module-program.ts", "scripts/optional-deps.ts", "scripts/predicate-copies.ts", "scripts/price-defaults.ts", "scripts/simulator-run-budget.ts", "scripts/stack-literals.ts", "scripts/table-ownership.ts", "scripts/test-run-budget.ts", "scripts/verification-split.ts"]) {
     fs.copyFileSync(path.join(REPO, file), path.join(into, file));
   }
   fs.cpSync(path.join(REPO, "scripts", "lints"), path.join(into, "scripts", "lints"), { recursive: true });
@@ -828,14 +923,9 @@ function plant(root: string, probe: PlannedProbe): void {
   fs.writeFileSync(target, `${probe.content}${fs.readFileSync(target, "utf-8")}`);
 }
 
+/** The boundary gate's check of the tree at `root`, as `just check` runs it, in this process: its kept programs serve the next tree whose texts they hold. */
 function runChecker(root: string): { status: number | null; output: string } {
-  const result = spawnSync(process.execPath, [path.join(REPO, "node_modules", "tsx", "dist", "cli.mjs"), path.join(root, "scripts", "check-boundaries.ts")], {
-    cwd: root,
-    encoding: "utf-8",
-    timeout: 120_000,
-  });
-  if (result.error !== undefined) throw new ProbeTreeError("run check-boundaries", result.error.message);
-  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+  return boundaryReport(root);
 }
 
 const VIOLATION_LINE = /^ {2}(\S+:\d+ {2}.+)$/;
@@ -855,6 +945,9 @@ describe("boundary-rules.toml against the context map", () => {
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), "ashara-boundary-probes-"));
     copyTree(packages, scratch);
     clean = runChecker(scratch);
+    // The planted tree's texts differ from the clean one's, so its program is another: the clean
+    // one is let go first, and no two trees' programs are held at once.
+    forgetPrograms();
     const rulesFile = path.join(scratch, "boundary-rules.toml");
     const rules = fs.readFileSync(rulesFile, "utf-8");
     const probeModules = Object.fromEntries(Object.entries(MODULES).map(([pkg, modules]) => [pkg, [PROBE_MODULE, probeModuleAllow(modules), `module.${EMPTY_MODULE.name} = ["${EMPTY_MODULE.glob}"]`]]));
@@ -876,6 +969,7 @@ describe("boundary-rules.toml against the context map", () => {
   }, 300_000);
 
   afterAll(() => {
+    forgetPrograms();
     if (scratch !== "") fs.rmSync(scratch, { recursive: true, force: true });
   });
 

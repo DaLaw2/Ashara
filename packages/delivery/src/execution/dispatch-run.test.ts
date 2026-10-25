@@ -2,9 +2,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
+import { afterAll, beforeEach, describe, expect, test, vi, afterEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
-import { createWorkItemId, parseProjectId } from "@ashara/shared";
+import { createWorkItemId, observeRetryWaits, parseProjectId } from "@ashara/shared";
 import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
@@ -22,6 +22,15 @@ import type { GiveUpCause } from "./give-up-causes.js";
 import { routeAsGivenUp } from "./reopen-routes.js";
 import { routingDepsOf } from "./routing-deps.js";
 import type { DispatchLoop, DispatchRunDeps, TaskDispatchSteps } from "./dispatch-run-deps.js";
+
+// The retries are what these tests judge, never the length of their pauses: each pause ends on the next turn of the event loop.
+let restoreRetryWaits: () => void = () => {};
+beforeEach(() => {
+  restoreRetryWaits = observeRetryWaits(() => new Promise((resolve) => setImmediate(resolve)));
+});
+afterEach(() => {
+  restoreRetryWaits();
+});
 
 const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 // Stable ID shared by every item copy the mock repo returns, so the domain

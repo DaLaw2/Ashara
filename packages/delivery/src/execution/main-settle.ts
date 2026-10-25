@@ -1,5 +1,5 @@
 import type { DomainEvent } from "@ashara/shared";
-import { describeErrorChain } from "@ashara/shared";
+import { describeErrorChain, retryWait } from "@ashara/shared";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import type { WorkItem } from "../domain/index.js";
@@ -115,7 +115,7 @@ export async function routeAsSuccess(deps: ExecutionRoutingDeps, task: WorkItem,
       // eslint-disable-next-line no-restricted-syntax -- not a reopen: a rejected completion is the caller's answer, never retried
       if (e instanceof InvalidStatusTransition || attempt >= attempts || wait === undefined) throw e;
       deps.logger.warn("delivery.completion-retry", `completion failed on attempt ${attempt} of ${attempts}; retrying in ${wait}ms`, { taskId: task.id, attempt, attempts }, e);
-      await new Promise((resolve) => setTimeout(resolve, wait));
+      await retryWait(wait);
       continue;
     }
     await publishBestEffort(deps, task.id, events, "execution.routeAsSuccess");
