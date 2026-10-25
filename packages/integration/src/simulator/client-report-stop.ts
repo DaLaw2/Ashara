@@ -1,18 +1,12 @@
-import {
-  namedLines,
-  paragraph,
-  sweptSource,
-  tableProblems,
-  terminalSweepProblem,
-  unsweptSource,
-} from "./client-report-core.js";
+import { afterTitle, cites, citedOf, namedLines, namesTitle } from "./client-message-facts.js";
+import { sweptSource, tableProblems, terminalSweepProblem, unsweptSource } from "./client-report-core.js";
 import type { ReportAdd, ReportedItem } from "./client-report-core.js";
 import type { ReportRecords } from "./client-reports.js";
 
 /**
  * I4 on a stopped project's stop report: there is exactly one, it names exactly the merges recorded,
- * it is told only once the stop's terminal sweep is over (terminalSweepProblem), and it carries the
- * guarantee table of that sweep.
+ * each by its title on a line citing its commit and no other task's, it is told only once the stop's
+ * terminal sweep is over (terminalSweepProblem), and it carries the guarantee table of that sweep.
  */
 export function checkStopReport(records: ReportRecords, items: readonly ReportedItem[], add: ReportAdd): void {
   const stops = records.reports.filter((report) => report.reportsOn === "client-stop");
@@ -22,11 +16,14 @@ export function checkStopReport(records: ReportRecords, items: readonly Reported
   const merges = items.flatMap((item) =>
     item.level === "Task" && item.mergeCommit !== null ? [{ title: item.title, mergeCommit: item.mergeCommit }] : [],
   );
-  /* eslint-disable-next-line no-restricted-syntax -- policy default: an absent paragraph names no merge, so each
-     merged task below is reported as stop-merges */
-  const lines = namedLines(paragraph(stop.body, "What is on main") ?? "");
+  const lines = namedLines(stop.body);
   for (const item of merges) {
-    if (!lines.some((line) => line.startsWith(`- "${item.title}"`) && line.includes(item.mergeCommit))) {
+    const others = merges.flatMap((each) => (each.mergeCommit === item.mergeCommit ? [] : [each.mergeCommit]));
+    const stated = (line: string): boolean => {
+      const facts = afterTitle(line, item.title);
+      return cites(facts, item.mergeCommit) && citedOf(facts, others).length === 0;
+    };
+    if (!lines.some((line) => namesTitle(line, item.title) && stated(line))) {
       add("stop-merges", `the stop report does not name "${item.title}" merged as ${item.mergeCommit}`);
     }
   }

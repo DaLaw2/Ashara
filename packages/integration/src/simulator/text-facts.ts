@@ -4,6 +4,22 @@ import { sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { describeErrorChain } from "@ashara/shared";
 import { BlockedReasonCorrupt, parseStoredBlockedReason, parseStoredTaskSpec } from "@ashara/delivery";
+import {
+  besides,
+  carries,
+  cites,
+  citedOf,
+  countsOf,
+  figuresOf,
+  kindsSaid,
+  leadOf,
+  openingOf,
+  outsideFences,
+  paragraphsOf,
+  paragraphsSaying,
+  says,
+} from "./client-message-facts.js";
+import type { Signature } from "./client-message-facts.js";
 import { checkReports } from "./client-reports.js";
 import type { Database } from "./database.js";
 import { PLACEHOLDER_MARKER, PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "./product.js";
@@ -13,11 +29,13 @@ import { PLACEHOLDER_MARKER, PUBLIC_INTERFACE_PATH, isScaffoldInterface } from "
  * states in what it writes for an agent or the client is the fact the store held when it composed
  * it. Judged by structure, not language: the oracle recomputes from the rows each fact a composer
  * is meant to state, and compares it with the structured part of what was written (a brief's vision
- * version and assumptions) or with the fixed sentence shapes the text carries. Which composer each
+ * version and assumptions) or, in a client message, with the facts the message carries
+ * (client-message-facts.ts), never with an expected whole sentence. Which composer each
  * check judges, which I4 (client-reports.ts) judges, and which none judges and why, is data:
  * TEXT_COVERED, TEXT_EXCLUDED and CLIENT_MESSAGE_WRITERS at the end of this file, which
  * text-coverage.test.ts holds to every composer and client_messages writer the source declares.
- * The expected wording is written here, never read from a composer: an oracle that asks production
+ * The expected facts, and the key terms that name a kind no id or figure carries, are written here,
+ * never read from a composer: an oracle that asks production
  * what to expect can never find production wrong (boundary-rules.toml [integration] `named-only`).
  */
 
@@ -594,14 +612,9 @@ function checkBriefTask(title: string, context: string, rawSpec: unknown, add: A
   }
 }
 
-/** What the client reads before a question's assumption, as the oracle words it. */
-const PROCEEDS_ON = "Until you answer, we proceed on this assumption:";
-/** The same label on a contract Ashara declines, where no work proceeds on anything. */
-const CONTRACT_RESTS_ON = "Until you answer, the contract rests on this assumption:";
-
 /**
- * Every Liaison question: the assumption it says work proceeds on is the one its vision records for it, Inferred and
- * asked.
+ * Every Liaison question: it carries the statement of the assumption its vision records for it, Inferred and asked,
+ * and no other assumption's of that version, whatever words lead it in.
  */
 function checkQuestions(records: TextFactRecords, add: Add, versions: Versions): void {
   for (const [index, question] of records.questions.entries()) {
@@ -625,12 +638,21 @@ function checkQuestions(records: TextFactRecords, add: Add, versions: Versions):
       continue;
     }
     const problems = [
-      ...(question.body.startsWith(open.text)
+      ...(carries(openingOf(question.body), open.text)
         ? []
         : [`does not open with its recorded text "${open.text.slice(0, 80)}"`]),
-      ...([PROCEEDS_ON, CONTRACT_RESTS_ON].some((label) => question.body.includes(`${label} ${assumption.statement}`))
+      ...(carries(question.body, assumption.statement)
         ? []
-        : [`does not say work proceeds, or the contract rests, on "${assumption.statement.slice(0, 120)}"`]),
+        : [`does not state the assumption it asks about, "${assumption.statement.slice(0, 120)}"`]),
+      ...at.assumptions
+        .filter(
+          (other) =>
+            other.key !== assumption.key &&
+            !carries(assumption.statement, other.statement) &&
+            !carries(other.statement, assumption.statement) &&
+            carries(question.body, other.statement),
+        )
+        .map((other) => `states ${other.key}'s statement "${other.statement.slice(0, 80)}", not asked about`),
       ...(assumption.status === "Inferred" && assumption.standing === "asked"
         ? []
         : [
@@ -644,9 +666,9 @@ function checkQuestions(records: TextFactRecords, add: Add, versions: Versions):
 }
 
 /**
- * Every reply to a client answer: for every assumption the answer changed, what the plan assumed and
- * what work now proceeds on, from the two vision versions around the answer, and only for an answer
- * that changed at least one.
+ * Every reply to a client answer: for every assumption the answer changed, it carries what the plan
+ * assumed and what work now proceeds on, the statements of the two vision versions around the answer,
+ * and only for an answer that changed at least one.
  */
 function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versions): void {
   for (const reply of records.answerReplies) {
@@ -692,13 +714,13 @@ function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versio
     }
     for (const { assumption, prior } of changed) {
       const problems = [
-        ...(prior !== undefined && reply.body.includes(`The plan assumed: ${prior.statement}`)
+        ...(prior !== undefined && carries(reply.body, prior.statement)
           ? []
           : [
               `does not state what the plan assumed as v${version - 1} records it ` +
                 `("${prior?.statement.slice(0, 120) ?? "no record"}")`,
             ]),
-        ...(reply.body.includes(`Work now proceeds on: ${assumption.statement}`)
+        ...(carries(reply.body, assumption.statement)
           ? []
           : [`does not state work now proceeds on "${assumption.statement.slice(0, 120)}" (v${version})`]),
       ];
@@ -708,15 +730,22 @@ function checkAnswerReplies(records: TextFactRecords, add: Add, versions: Versio
   }
 }
 
-/** How the contract draft opens, as the oracle words it: one Ashara declines opens with that. */
-const CONTRACT_OPENING = "This is the contract";
+/** The key terms by which a tender report opens as the contract draft, which one Ashara declines opens with too. */
+const CONTRACT_OPENING = ["contract"];
 
-/** How the draft marks a guarantee Ashara cannot verify, as the oracle words it. */
-const NOT_VERIFIABLE_WORDS = "not verifiable by Ashara";
-/** How the draft marks a guarantee whose drafter could not tell where it is observed, as the oracle words it. */
-const UNDECIDED_WORDS =
-  "Ashara could not tell where you would see it hold or break, so it does not count it as one it can verify " +
-  "and it cannot be shown to hold; tell us where you would see it and Ashara can check it";
+/** What a guarantee of the draft rests on, as the oracle reads it there. */
+type DraftBasis = "at-risk" | "tender" | "reading";
+/** The key terms that tell each basis apart in a guarantee's line, written here and never read from the composer. */
+const BASIS_TERMS = {
+  "at-risk": { all: ["not confirmed"] },
+  tender: { all: ["tender states"] },
+  reading: { all: ["reading"] },
+} as const satisfies Record<DraftBasis, Signature>;
+const BASES: readonly DraftBasis[] = ["at-risk", "tender", "reading"];
+/** The key terms by which the draft marks a guarantee Ashara cannot verify. */
+const NOT_VERIFIABLE_TERMS = ["not verifiable"];
+/** The key terms by which the draft marks a guarantee whose drafter could not tell where it is observed. */
+const UNDECIDED_TERMS = ["could not tell"];
 
 const draftedGuarantee = z.looseObject({
   id: z.string().min(1),
@@ -741,7 +770,7 @@ const draftedAssumption = z.looseObject({
 function checkContractDraft(records: TextFactRecords, add: Add): void {
   const first = records.visions[0];
   // The reading report replies to the tender too: the contract draft is told by its opening.
-  const reports = records.tenderReports.filter((report) => report.body.startsWith(CONTRACT_OPENING));
+  const reports = records.tenderReports.filter((report) => says(openingOf(report.body), CONTRACT_OPENING));
   const guarantees = z.array(draftedGuarantee).safeParse(first?.guarantees);
   if (first === undefined || !guarantees.success || guarantees.data.length === 0) {
     if (reports.length > 0)
@@ -767,28 +796,41 @@ function checkContractDraft(records: TextFactRecords, add: Add): void {
     return;
   }
   const lines = report.body.split("\n");
+  const keys = inferences.data.map((a) => a.key);
   for (const g of guarantees.data) {
     const resting = inferences.data
       .filter((a) => a.underpins.includes(g.id) || (g.source.kind === "assumption" && g.source.id === a.key))
       .map((a) => a.key);
-    const basis =
-      resting.length > 0
-        ? `an assumption you have not confirmed; at risk until you confirm ${resting.join(", ")}`
-        : g.source.kind === "tender"
-          ? "what your tender states"
-          : "our reading of your tender";
-    // One whose drafter could not tell where it is observed, and one Ashara cannot verify, is marked so after its
+    const basis: DraftBasis = resting.length > 0 ? "at-risk" : g.source.kind === "tender" ? "tender" : "reading";
+    const listed = lines.filter((each) => each.startsWith(`- ${g.id}: `));
+    const [line] = listed;
+    const facts = line === undefined ? "" : besides(line.slice(`- ${g.id}: `.length), g.statement);
+    const bases = kindsSaid(facts, BASES, BASIS_TERMS);
+    const cited = citedOf(facts, keys);
+    // One whose drafter could not tell where it is observed, and one Ashara cannot verify, is marked so beside its
     // basis, as v1 records it.
-    const doubted = g.verification === "undecided" ? `; ${UNDECIDED_WORDS}` : "";
-    const marked = g.verification === "not-by-ashara" ? `; ${NOT_VERIFIABLE_WORDS}` : "";
-    const line = `- ${g.id}: ${g.statement} (basis: ${basis}${doubted}${marked}`;
-    const listed = lines.find((each) => each.startsWith(line));
-    const next = listed?.charAt(line.length);
-    if (listed === undefined || !(next === ")" || (marked !== "" && next === ":")))
+    const problems = [
+      ...(line === undefined || listed.length > 1 ? [`lists it ${listed.length} time(s)`] : []),
+      ...(line === undefined || carries(line, g.statement)
+        ? []
+        : [`does not state it as "${g.statement.slice(0, 120)}"`]),
+      ...(bases.length === 1 && bases[0] === basis
+        ? []
+        : [`states its basis as [${bases.join(", ")}], recorded ${basis}`]),
+      ...(cited.join(",") === resting.join(",")
+        ? []
+        : [`rests it on [${cited.join(", ")}], recorded [${resting.join(", ")}]`]),
+      ...(says(facts, UNDECIDED_TERMS) === (g.verification === "undecided")
+        ? []
+        : ["marks it undecided where v1 does not, or not where it does"]),
+      ...(says(facts, NOT_VERIFIABLE_TERMS) === (g.verification === "not-by-ashara")
+        ? []
+        : ["marks it not verifiable by Ashara where v1 does not, or not where it does"]),
+    ];
+    if (problems.length > 0)
       add(
         `contract-draft:${g.id}`,
-        `the contract draft does not list ${g.id} with its basis as v${first.version} records it ` +
-          `("${line.slice(0, 200)}")`,
+        `the contract draft does not list ${g.id} as v${first.version} records it: ${problems.join("; ")}`,
       );
   }
   for (const a of inferences.data) {
@@ -804,23 +846,16 @@ function checkContractDraft(records: TextFactRecords, add: Add): void {
   }
 }
 
-/** How the decline of a contract states it, as the oracle words it: its terminal message says it, once. */
-const DECLINE_WORDS = [
-  "Ashara cannot verify any guarantee of this contract as written",
-  "Please restate the guarantees",
-  "confirming it as written does not start it",
-];
-/** What every intake message on a declined contract says in the decline's place, as the oracle words it. */
-const NOT_STARTED_WORDS = ["Work has not started"];
-/** What no message posted for a declined contract says: each tells the client work is under way or waits. */
-const UNDER_WAY_WORDS = [
-  "Work does not wait",
-  "work proceeds",
-  "Work proceeds",
-  "Work has started",
-  "nothing waits",
-  PROCEEDS_ON,
-];
+/**
+ * The key terms of the decline of a contract, each a fact its terminal message states, once: that Ashara
+ * cannot verify a guarantee as written, that the client is asked to restate them, and that confirming it
+ * does not start work.
+ */
+const DECLINE_TERMS = ["cannot verify", "restate", "does not start"];
+/** The key terms every intake message on a declined contract says in the decline's place: work has not started. */
+const NOT_STARTED_TERMS = ["not started"];
+/** The key terms no message posted for a declined contract says: each tells the client work is under way or waits. */
+const UNDER_WAY_TERMS = ["work does not wait", "work proceeds", "work has started", "nothing waits", "we proceed"];
 
 const markedGuarantee = z.looseObject({ verification: z.string().optional() });
 
@@ -847,7 +882,7 @@ function declinedVersion(vision: z.infer<typeof visionRow>): boolean | null {
  */
 function checkDeclinedContract(records: TextFactRecords, add: Add): void {
   for (const [index, message] of records.declines.entries()) {
-    const missing = DECLINE_WORDS.filter((words) => !message.body.includes(words));
+    const missing = DECLINE_TERMS.filter((term) => !says(message.body, [term]));
     const named = missing.map((w) => `"${w}"`).join(", ");
     if (missing.length > 0) add(`declined-message:${index + 1}`, `decline ${index + 1} does not state ${named}`);
   }
@@ -861,9 +896,9 @@ function checkDeclinedContract(records: TextFactRecords, add: Add): void {
   if (declined) {
     const intakeQuestions = records.questions.filter((question) => question.intake);
     for (const [index, message] of [...intakeQuestions, ...records.tenderReports].entries()) {
-      const missing = NOT_STARTED_WORDS.filter((words) => !message.body.includes(words));
-      const restated = DECLINE_WORDS.filter((words) => message.body.includes(words));
-      const underWay = UNDER_WAY_WORDS.filter((words) => message.body.includes(words));
+      const missing = NOT_STARTED_TERMS.filter((term) => !says(message.body, [term]));
+      const restated = says(message.body, DECLINE_TERMS) ? DECLINE_TERMS : [];
+      const underWay = UNDER_WAY_TERMS.filter((term) => says(message.body, [term]));
       const quoted = (words: readonly string[]): string => words.map((w) => `"${w}"`).join(", ");
       const faults = [
         ...(missing.length > 0 ? [`does not state ${quoted(missing)}`] : []),
@@ -899,49 +934,72 @@ export function declinedWork(records: TextFactRecords): string | null {
   );
 }
 
-/** How a reading report opens, as the oracle words it: the first reading asked the client nothing. */
-const READING_OPENINGS = ["We read your tender and found nothing", "Our first reading of your tender found nothing"];
+/** The key terms by which a tender report opens as the reading report: the tender's first reading found nothing. */
+const READING_OPENING = ["tender", "found nothing"];
+/** The key terms of a paragraph telling how the tender was read, and of one saying that is not on record. */
+const READ_TERMS = ["tender", "read"];
+const READ_UNRECORDED = ["tender", "not on record"];
 
-/** The words that name each strength of second reading, as the oracle words them. */
-const READING_STRENGTH_WORDS: Readonly<Record<string, string>> = {
-  "other-family": "by another model family",
-  "same-family-other-model": "by another model of the same family as the first reading",
-  "same-model": "by the same model as the first reading",
-};
+/** The strengths of a second reading, by the keys intake_readings records them under. */
+const STRENGTHS = ["other-family", "same-family-other-model", "same-model"] as const;
+/** The key terms that tell each strength apart, written here and never read from the composer. */
+const STRENGTH_TERMS = {
+  "other-family": { all: ["model family"] },
+  "same-family-other-model": { all: ["same family"] },
+  "same-model": { all: ["same model"] },
+} as const satisfies Record<(typeof STRENGTHS)[number], Signature>;
 
-/**
- * What a text must state of a recorded reading that asked nothing: its strength and what it found, or that it is
- * unconfirmed.
- */
-function readingClaims(reading: NonNullable<TextFactRecords["intakeReading"]>, delivered: boolean): string[] {
-  if (reading.confirmation === "unconfirmed")
-    return delivered
-      ? ["no second reading could be had", "not verified by Ashara"]
-      : ["no second reading of it could be had", "unconfirmed"];
-  const strength = reading.secondStrength === null ? undefined : READING_STRENGTH_WORDS[reading.secondStrength];
-  const by =
-    strength === undefined
-      ? [`a strength the oracle knows (recorded ${reading.secondStrength ?? "none"})`]
-      : [strength];
-  if (reading.confirmation === "confirmed") return [...by, "found nothing to ask either"];
-  const asked = reading.secondQuestions;
-  if (asked === null) return [...by, "a recorded count of questions"];
-  if (delivered) return [...by, `found ${asked} question`];
-  return [...by, asked === 1 ? "found the question we have sent you" : `found the ${asked} questions we have sent you`];
+/** What a second reading found: nothing either, the questions it raised, or none could be had. */
+type ReadingOutcome = "confirmed" | "questions-raised" | "unconfirmed";
+const OUTCOME_TERMS = {
+  confirmed: { all: ["nothing to ask either"] },
+  "questions-raised": { all: ["question|questions"] },
+  unconfirmed: { all: ["no second reading"] },
+} as const satisfies Record<ReadingOutcome, Signature>;
+const OUTCOMES: readonly ReadingOutcome[] = ["confirmed", "questions-raised", "unconfirmed"];
+
+/** The questions a text says a second reading raised: its one figure, or one when it names a question and no figure. */
+function questionsStated(text: string): number | null {
+  const figures = figuresOf(text);
+  if (figures.length === 1) return figures[0] ?? null;
+  return figures.length === 0 && says(text, ["question"]) && !says(text, ["questions"]) ? 1 : null;
 }
 
 /**
- * The reading report and the delivered report's sentence on the tender's reading,
- * against intake_readings: a reading that asked nothing is told once, at
- * intake, with the strength of the second reading and what it found or that none answered, and so is
- * every delivered report; a reading that asked questions is told neither way; one not on record is
- * said to be so in the delivered report.
+ * Where a text departs from a recorded reading that asked nothing, by the facts it carries: what the
+ * second reading found alone, and, where one could be had, its strength alone and, where it raised
+ * questions, how many.
+ */
+function readingProblems(reading: NonNullable<TextFactRecords["intakeReading"]>, text: string): string[] {
+  const outcome: ReadingOutcome =
+    reading.confirmation === "unconfirmed" || reading.confirmation === "confirmed"
+      ? reading.confirmation
+      : "questions-raised";
+  const outcomes = kindsSaid(text, OUTCOMES, OUTCOME_TERMS);
+  const problems =
+    outcomes.length === 1 && outcomes[0] === outcome
+      ? []
+      : [`it states the second reading as [${outcomes.join(", ")}]`];
+  if (outcome === "unconfirmed") return problems;
+  const strengths = kindsSaid(text, STRENGTHS, STRENGTH_TERMS);
+  if (strengths.length !== 1 || strengths[0] !== reading.secondStrength)
+    problems.push(`it names the strength [${strengths.join(", ")}], recorded ${reading.secondStrength ?? "none"}`);
+  const asked = questionsStated(text);
+  if (outcome === "questions-raised" && (reading.secondQuestions === null || asked !== reading.secondQuestions))
+    problems.push(`it states ${asked ?? "no count of"} question(s), recorded ${reading.secondQuestions ?? "none"}`);
+  return problems;
+}
+
+/**
+ * The reading report and the delivered report's paragraph on the tender's reading, against
+ * intake_readings, by the facts they carry: a reading that asked nothing is told once, at intake, with
+ * the strength of the second reading and what it found or that none answered, and so is every
+ * delivered report; a reading that asked questions is told neither way; one not on record is said to
+ * be so in the delivered report.
  */
 function checkIntakeReading(records: TextFactRecords, add: Add): void {
   const reading = records.intakeReading;
-  const told = records.tenderReports.filter((report) =>
-    READING_OPENINGS.some((opening) => report.body.startsWith(opening)),
-  );
+  const told = records.tenderReports.filter((report) => says(openingOf(report.body), READING_OPENING));
   if (reading === null || reading.confirmation === "not-needed") {
     if (told.length > 0)
       add(
@@ -950,8 +1008,9 @@ function checkIntakeReading(records: TextFactRecords, add: Add): void {
           `${reading === null ? "no reading" : "a reading that asked questions"}`,
       );
     for (const report of records.delivered) {
-      const unrecorded = report.body.includes("How your tender was read is not on record");
-      if (report.body.includes("When your tender was read") || unrecorded !== (reading === null)) {
+      const parts = paragraphsSaying(outsideFences(report.body), READ_TERMS);
+      const unrecorded = parts.filter((part) => says(leadOf(part), READ_UNRECORDED));
+      if (parts.length !== unrecorded.length || (unrecorded.length > 0) !== (reading === null)) {
         add(
           "delivered-reading",
           `the delivered report's sentence on the tender's reading does not fit intake_readings ` +
@@ -969,36 +1028,34 @@ function checkIntakeReading(records: TextFactRecords, add: Add): void {
     );
   }
   for (const report of told) {
-    const missing = readingClaims(reading, false).filter((claim) => !report.body.includes(claim));
-    if (missing.length > 0)
+    const problems = readingProblems(reading, openingOf(report.body));
+    if (problems.length > 0)
       add(
         "reading-report",
-        `the reading report does not state ${missing.map((claim) => `"${claim}"`).join(", ")} for a reading ` +
-          `recorded ${reading.confirmation}`,
+        `the reading report, for a reading recorded ${reading.confirmation}: ${problems.join("; ")}`,
       );
   }
   for (const report of records.delivered) {
-    const sentence = report.body.split("\n\n").find((part) => part.startsWith("When your tender was read"));
-    const missing =
-      sentence === undefined
-        ? ["When your tender was read"]
-        : readingClaims(reading, true).filter((claim) => !sentence.includes(claim));
-    if (missing.length > 0)
+    const parts = paragraphsSaying(outsideFences(report.body), READ_TERMS).filter(
+      (part) => !says(leadOf(part), READ_UNRECORDED),
+    );
+    const [part] = parts;
+    const problems =
+      part === undefined || parts.length > 1
+        ? [`${parts.length} of its paragraphs tell how the tender was read; one does`]
+        : readingProblems(reading, leadOf(part));
+    if (problems.length > 0)
       add(
         "delivered-reading",
-        `the delivered report does not state ${missing.map((claim) => `"${claim}"`).join(", ")} for a ` +
-          `reading recorded ${reading.confirmation}`,
+        `the delivered report, for a reading recorded ${reading.confirmation}: ${problems.join("; ")}`,
       );
   }
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 /**
- * The first-plan report's decomposed and check task counts, of the plan that stood when it was
- * reported: tasks written by then, less those a revision written by then superseded.
+ * The first-plan report's decomposed and check task counts, each the one count it states of its unit,
+ * of the plan that stood when it was reported: tasks written by then, less those a revision written
+ * by then superseded.
  */
 function checkFirstPlan(records: TextFactRecords, add: Add): void {
   const { report, items, revisions } = records.firstPlan;
@@ -1030,27 +1087,38 @@ function checkFirstPlan(records: TextFactRecords, add: Add): void {
   }
   const decomposed = standing.filter((item) => item.origin === "decomposition").length;
   const checks = standing.filter((item) => item.origin === "check").length;
-  const expected = [
-    `split into ${plural(decomposed, "task")} for what you asked for.`,
-    `(${plural(checks, "check task")})`,
-  ];
-  for (const phrase of expected) {
-    if (!report.body.includes(phrase))
+  const prose = paragraphsOf(report.body).map((part) => leadOf(part)).join("\n\n");
+  for (const [unit, count] of [
+    ["task", decomposed],
+    ["check task", checks],
+  ] as const) {
+    const stated = countsOf(prose, unit);
+    if (stated.length !== 1 || stated[0] !== count)
       add(
         "first-plan-counts",
-        `the first-plan report does not say "${phrase}", the plan that stood when it was posted; it reads ` +
-          `"${report.body.slice(0, 200)}"`,
+        `the first-plan report counts [${stated.join(", ")}] ${unit}(s); the plan that stood when it was posted ` +
+          `holds ${count}`,
       );
   }
 }
 
-const ASSUMPTIONS_HEAD = "The assumptions the guarantees rest on:";
+/** The key terms of the paragraph listing the assumptions the guarantees rest on. */
+const ASSUMPTIONS_TERMS = ["assumptions"];
+
+/** Whether the client stated an assumption, as the vision records it. */
+type TableStanding = "stated" | "unconfirmed";
+/** The key terms that tell each standing apart in an assumption's line, written here, never read from the composer. */
+const TABLE_STANDING_TERMS = {
+  stated: { all: ["stated by you"] },
+  unconfirmed: { all: ["not confirmed"] },
+} as const satisfies Record<TableStanding, Signature>;
+const TABLE_STANDINGS: readonly TableStanding[] = ["stated", "unconfirmed"];
 
 /**
  * The assumptions paragraph of the delivered report's guarantee table names every assumption of
- * the vision at acceptance not recorded as internal design, once, by its key and statement, and says
- * whether the client stated it, as that version records it: an assumption the client has not stated
- * is never told to them as theirs.
+ * the vision at acceptance not recorded as internal design, once, by its key and statement, and states
+ * whether the client stated it, as that version records it, by the facts its line carries: an
+ * assumption the client has not stated is never told to them as theirs.
  */
 function checkTableAssumptions(records: TextFactRecords, add: Add, versions: Versions): void {
   for (const report of records.delivered) {
@@ -1064,15 +1132,13 @@ function checkTableAssumptions(records: TextFactRecords, add: Add, versions: Ver
       );
       continue;
     }
-    /* eslint-disable-next-line no-restricted-syntax -- policy default: an absent paragraph lists no assumption, so
-       each one the vision holds is named missing below */
-    const listed = (report.body.split("\n\n").find((part) => part.startsWith(ASSUMPTIONS_HEAD)) ?? "")
-      .split("\n")
+    const listed = paragraphsSaying(outsideFences(report.body), ASSUMPTIONS_TERMS)
+      .flatMap((part) => part.split("\n"))
       .filter((line) => line.startsWith("- "));
     const visible = vision.assumptions.filter((assumption) => assumption.kind !== "internal-design");
     for (const assumption of visible) {
       const lines = listed.filter((line) => line.startsWith(`- ${assumption.key}: `));
-      const said = assumption.status === "Stated" ? "stated by you)" : "not confirmed by you)";
+      const standing: TableStanding = assumption.status === "Stated" ? "stated" : "unconfirmed";
       const [line] = lines;
       if (lines.length !== 1 || line === undefined) {
         add(
@@ -1080,12 +1146,14 @@ function checkTableAssumptions(records: TextFactRecords, add: Add, versions: Ver
           `the delivered report names assumption ${assumption.key} ${lines.length} time(s) among the ` +
             `assumptions the guarantees rest on; it must once`,
         );
-      } else if (!line.startsWith(`- ${assumption.key}: ${assumption.statement} (`) || !line.endsWith(said)) {
-        add(
-          `delivered-standing:${assumption.key}`,
-          `the delivered report says "${line.slice(0, 200)}"; at acceptance ${assumption.key} is ` +
-            `"${assumption.statement.slice(0, 120)}", ${assumption.status}, so it must end "${said}"`,
-        );
+      } else {
+        const standings = kindsSaid(besides(line, assumption.statement), TABLE_STANDINGS, TABLE_STANDING_TERMS);
+        if (!carries(line, assumption.statement) || standings.length !== 1 || standings[0] !== standing)
+          add(
+            `delivered-standing:${assumption.key}`,
+            `the delivered report says "${line.slice(0, 200)}", its standing [${standings.join(", ")}]; at ` +
+              `acceptance ${assumption.key} is "${assumption.statement.slice(0, 120)}", ${assumption.status}`,
+          );
       }
     }
     const known = new Set(visible.map((assumption) => assumption.key));
@@ -1101,31 +1169,33 @@ function checkTableAssumptions(records: TextFactRecords, add: Add, versions: Ver
   }
 }
 
-/** How the delivered report introduces the quoted public interface, as the oracle words it. */
-function quotedLead(commit: string): string {
-  return `Public interface (from ${PUBLIC_INTERFACE_PATH} on main at commit ${commit}), quoted as the file reads.`;
+/** Whether a line names the public interface file at `commit`: the facts that lead its quote, or say it is missing. */
+function namesInterfaceAt(line: string, commit: string): boolean {
+  return cites(line, PUBLIC_INTERFACE_PATH) && cites(line, commit);
 }
 
-/** How the delivered report says the product has no public interface file, as the oracle words it. */
-function noneLine(commit: string): string {
-  return (
-    `How to run the product is not on record: its public interface file is missing. ${PUBLIC_INTERFACE_PATH} ` +
-    `is not on main at commit ${commit}.`
-  );
-}
-
-const CUT_SAID = "so only its start and end are quoted";
-/** What the quote must say Ashara did not check: whether the file describes the product. */
-const INTERFACE_UNJUDGED = "Ashara has not verified that it describes the delivered product.";
+/** The key terms by which the report says main holds no public interface file. */
+const MISSING_TERMS = ["missing"];
+/** The key terms by which the quote's lead says the file was cut. */
+const CUT_TERMS = ["start and end"];
+/** The key terms by which the quote's lead says Ashara did not check whether the file describes the product. */
+const UNJUDGED_TERMS = ["not verified"];
 const CUT_MARKER = /(?:^|\n)\[truncated by Ashara: (\d+) characters cut here\]\n/g;
 const FENCE = /^`{3,}$/;
 
-/** The sentence that leads the quote and the fenced block's text, or null when the report holds no such block. */
-function quotedBlock(body: string, lead: string): { readonly said: string; readonly quoted: string } | null {
-  const at = body.indexOf(`\n\n${lead}`);
+/**
+ * The line that leads the quote of the public interface file at `commit`, opening a paragraph and
+ * naming the file and the commit, and the fenced block's text after it; null when the report holds no
+ * such block.
+ */
+function quotedBlock(body: string, commit: string): { readonly said: string; readonly quoted: string } | null {
+  const lines = body.split("\n");
+  const at = lines.findIndex((line, i) => {
+    const next = lines[i + 1];
+    return (i === 0 || lines[i - 1] === "") && namesInterfaceAt(line, commit) && next !== undefined && FENCE.test(next);
+  });
   if (at < 0) return null;
-  const [said = "", fence = "", ...rest] = body.slice(at + 2).split("\n");
-  if (!FENCE.test(fence)) return null;
+  const [said = "", fence = "", ...rest] = lines.slice(at);
   const close = rest.indexOf(fence);
   if (close < 0) return null;
   const inner = rest.slice(0, close);
@@ -1195,17 +1265,20 @@ function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
       );
       continue;
     }
-    const block = quotedBlock(report.body, quotedLead(commit));
+    const block = quotedBlock(report.body, commit);
     if (file.kind === "absent") {
       add(
         "delivered-absent-interface",
         `the project was delivered with no ${PUBLIC_INTERFACE_PATH} on main at commit ${commit.slice(0, 12)}`,
       );
-      if (block !== null || !report.body.includes(`\n\n${noneLine(commit)}`)) {
+      const saysMissing = paragraphsSaying(outsideFences(report.body), MISSING_TERMS).some((part) =>
+        namesInterfaceAt(part, commit),
+      );
+      if (block !== null || !saysMissing) {
         add(
           "delivered-interface",
           `main holds no ${PUBLIC_INTERFACE_PATH} at commit ${commit.slice(0, 12)}, but the delivered report ` +
-            `does not say "${noneLine(commit)}"`,
+            `${block === null ? "does not say it is missing there" : "quotes a block of it"}`,
         );
       }
       continue;
@@ -1221,7 +1294,7 @@ function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
       add(
         "delivered-interface",
         `main holds ${PUBLIC_INTERFACE_PATH} at commit ${commit.slice(0, 12)}, but the delivered report ` +
-          `quotes no block of it after "${quotedLead(commit)}"`,
+          `quotes no block of it after a line naming it at that commit`,
       );
       continue;
     }
@@ -1234,17 +1307,18 @@ function checkDeliveredInterface(records: TextFactRecords, add: Add): void {
       );
       continue;
     }
-    if ((quote === "cut") !== block.said.includes(CUT_SAID)) {
+    if ((quote === "cut") !== says(block.said, CUT_TERMS)) {
       add(
         "delivered-interface-cut",
         `the delivered report quotes ${PUBLIC_INTERFACE_PATH} ${quote}, but ` +
           `${quote === "cut" ? "does not say" : "says"} it was cut: "${block.said.slice(0, 200)}"`,
       );
     }
-    if (!block.said.includes(INTERFACE_UNJUDGED)) {
+    if (!says(block.said, UNJUDGED_TERMS)) {
       add(
         "delivered-interface-claim",
-        `the delivered report quotes ${PUBLIC_INTERFACE_PATH} without saying "${INTERFACE_UNJUDGED}": ` +
+        `the delivered report quotes ${PUBLIC_INTERFACE_PATH} without saying Ashara has not verified it describes ` +
+          `the product: ` +
           `acceptance compares its bytes with the scaffold's, never what it says`,
       );
     }

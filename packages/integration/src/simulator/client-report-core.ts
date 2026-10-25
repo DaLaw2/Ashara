@@ -1,4 +1,14 @@
 import { z } from "zod";
+import {
+  cites,
+  commitsCited,
+  idsListed,
+  leadOf,
+  paragraphsOf,
+  paragraphsSaying,
+  recordIdsCited,
+  versionsCited,
+} from "./client-message-facts.js";
 import type { ReportRecords } from "./client-reports.js";
 
 /**
@@ -34,20 +44,6 @@ export type ReportRow = ReportRecords["reports"][number];
 
 /** Every report of the project by its id. */
 export type ReportsById = ReadonlyMap<string, ReportRow>;
-
-export function requestCount(count: number): string {
-  return `${count} model request${count === 1 ? "" : "s"}`;
-}
-
-/** The paragraph of a report that opens with `head`, or null. */
-export function paragraph(body: string, head: string): string | null {
-  return body.split("\n\n").find((part) => part.startsWith(head)) ?? null;
-}
-
-/** The lines of a paragraph that name a task (`- "<title>"...`). */
-export function namedLines(part: string | null): string[] {
-  return part === null ? [] : part.split("\n").filter((line) => line.startsWith(`- "`));
-}
 
 export const sweptAssumption = z.looseObject({
   key: z.string().min(1).optional(),
@@ -211,20 +207,22 @@ function inForceAt(vision: ReportRecords["visions"][number]): GuaranteeInForce[]
   return guaranteesInForce(form.data, scope.data, guarantees.data, inferences.data);
 }
 
-const TABLE_ON_COMMIT = "Each guarantee of your contract (vision v";
-const TABLE_OFF_COMMIT = "No check could run on a commit of main for this report";
-const PUNCH_HEAD = "The punch list";
-const TABLE_UNREADABLE = "Ashara's records of this project's guarantees";
+/** A guarantee table's line carries its verdict as a field: `- <id>: ... | verdict: <verdict> ...`. */
+const VERDICT_FIELD = /\| verdict: (pass|fail|unjudged|not verified)\b/;
 
-/** The ids at the head of a paragraph's `- <id>: ` lines, in order. */
-function idsListed(part: string | null): string[] {
-  return part === null
-    ? []
-    : part.split("\n").flatMap((line) => {
-        const id = /^- ([A-Za-z]+\d+): /.exec(line)?.[1];
-        return id === undefined ? [] : [id];
-      });
+/** The paragraphs of a message that list guarantees with their verdicts: its guarantee tables. */
+function tablesOf(body: string): string[] {
+  return paragraphsOf(body).filter((part) =>
+    part.split("\n").some((line) => /^- [A-Za-z]+\d+: /.test(line) && VERDICT_FIELD.test(line)),
+  );
 }
+
+/** The key terms of the paragraph that says no contract is on record, so no guarantee is judged. */
+const NO_CONTRACT = ["no contract", "judged"];
+/** The key terms of the paragraph that says the records of the guarantees do not hold together as a table. */
+const TABLE_UNREADABLE = ["guarantees", "do not hold together"];
+/** The key terms of the punch list's paragraph. */
+const PUNCH_LIST = ["punch list"];
 
 /** What a table is judged from: its sweep, or none on record for the message, with the vision version current then. */
 interface TableSource {
@@ -303,17 +301,26 @@ export function tableProblems(
   const stored = records.verdicts.filter((verdict) => verdict.reportId === report.id);
   const evidence = source.sweepId === null ? [] : records.evidence.filter((each) => each.sweepId === source.sweepId);
   const at = source.sweepId === null ? "" : ` at sweep ${source.sweepId}`;
-  const saysUnreadable = paragraph(report.body, `${TABLE_UNREADABLE}${at} do not hold together`) !== null;
+  // A paragraph telling of this table's sweep cites it; one for no sweep has none to cite.
+  const ofSweep = (part: string): boolean => source.sweepId === null || cites(part, source.sweepId);
+  const saysUnreadable = paragraphsSaying(report.body, TABLE_UNREADABLE).some(ofSweep);
   const broken: string[] = [];
   const versions = [...new Set(evidence.map((each) => each.visionVersion))];
   if (versions.length > 1)
     broken.push(`its evidence${at} names vision versions ${versions.join(", ")}; one table cannot be judged from it`);
   const version = versions[0] ?? source.visionVersion;
   if (version === null) {
-    const noContract = `No contract is on record for this project${at}, so no guarantee is judged.`;
+    // It cites the sweep it was judged at and no other record: no vision version, and no sweep when none is.
+    const noContract = paragraphsSaying(report.body, NO_CONTRACT);
+    const cited = noContract.flatMap((part) => recordIdsCited(part));
+    const listed = tablesOf(report.body).flatMap((table) => idsListed(table));
     return [
       ...(stored.length === 0 ? [] : [`it stores ${stored.length} verdict(s) though no vision is on record${at}`]),
-      ...(report.body.includes(noContract) ? [] : [`no vision is on record${at}, but it does not say "${noContract}"`]),
+      ...(noContract.length === 0 ? [`no vision is on record${at}, but it does not say no contract is`] : []),
+      ...(noContract.length > 0 && cited.join(",") !== (source.sweepId === null ? [] : [source.sweepId]).join(",")
+        ? [`no vision is on record${at}, but it says no contract is citing [${cited.join(", ")}]`]
+        : []),
+      ...(listed.length === 0 ? [] : [`no vision is on record${at}, but its table judges [${listed.join(", ")}]`]),
     ];
   }
   const vision = records.visions.find((each) => each.version === version);
@@ -355,15 +362,12 @@ export function tableProblems(
 
   problems.push(...storedVerdictProblems(stored, expected, { sweepId: source.sweepId, version }));
 
-  const head =
-    source.sweepId === null
-      ? `${TABLE_OFF_COMMIT}: no sweep of main is on record for it, so each guarantee of your contract (vision ` +
-        `v${version}) is unjudged.`
-      : source.mainCommit === null
-        ? `${TABLE_OFF_COMMIT}; why is in Ashara's record of that attempt, sweep ${source.sweepId}.`
-        : `${TABLE_ON_COMMIT}${version}) is judged on main at commit ${source.mainCommit}, sweep ${source.sweepId}.`;
-  const table = paragraph(report.body, head);
-  if (table === null) return [...problems, `it carries no guarantee table opening "${head.slice(0, 120)}"`];
+  const tables = tablesOf(report.body);
+  const [table] = tables;
+  if (table === undefined || tables.length > 1)
+    return [...problems, `it carries ${tables.length} guarantee table(s) listing verdicts; a terminal message has one`];
+  const headProblem = tableHeadProblem(leadOf(table), source, version);
+  if (headProblem !== null) problems.push(headProblem);
   const lines = table.split("\n").filter((line) => line.startsWith("- "));
   if (JSON.stringify(idsListed(table)) !== JSON.stringify(ids)) {
     problems.push(
@@ -372,7 +376,7 @@ export function tableProblems(
   }
   for (const { guarantee, verdict, reason } of expected) {
     const line = lines.find((each) => each.startsWith(`- ${guarantee.id}: `));
-    const said = line === undefined ? null : /\| verdict: (pass|fail|unjudged|not verified)\b/.exec(line)?.[1];
+    const said = line === undefined ? null : VERDICT_FIELD.exec(line)?.[1];
     const told = reason === NOT_VERIFIABLE ? "not verified" : verdict;
     if (line !== undefined && said !== told)
       problems.push(`its table says ${guarantee.id} is ${said ?? "nothing"}; its evidence reads ${told}`);
@@ -380,6 +384,26 @@ export function tableProblems(
   const punched = punchListProblem(report.body, stored, expected);
   if (punched !== null) problems.push(punched);
   return problems;
+}
+
+/**
+ * Where a table's head departs from what it was judged on, by the facts it cites: the sweep, when there
+ * is one; the commit of main it ran on, or none when it ran on no commit; and the vision version, which
+ * a head judged on a commit, or on no sweep, names, and no head names wrongly.
+ */
+function tableHeadProblem(head: string, source: TableSource, version: number): string | null {
+  const problems: string[] = [];
+  if (source.sweepId !== null && !cites(head, source.sweepId)) problems.push(`does not cite sweep ${source.sweepId}`);
+  if (source.mainCommit !== null && !cites(head, source.mainCommit))
+    problems.push(`does not cite commit ${source.mainCommit}, the one it was judged on`);
+  const commits = commitsCited(head);
+  if (source.mainCommit === null && commits.length > 0)
+    problems.push(`cites commit ${commits.join(", ")}, though it was judged on none`);
+  const versions = versionsCited(head);
+  const named = source.sweepId === null || source.mainCommit !== null;
+  if (versions.some((each) => each !== version) || (named && versions.length === 0))
+    problems.push(`cites vision [${versions.map((each) => `v${each}`).join(", ")}]; it was judged at v${version}`);
+  return problems.length === 0 ? null : `its table's head ${problems.join("; ")}: "${head.slice(0, 160)}"`;
 }
 
 /** A guarantee in force with the verdict its evidence reads. */
@@ -448,8 +472,9 @@ function punchListProblem(
     ...expected.filter((each) => each.verdict === "unjudged"),
     ...expected.filter((each) => each.verdict === "pass" && atRisk.has(each.guarantee.id)),
   ].map((each) => each.guarantee.id);
-  const punch = paragraph(body, PUNCH_HEAD);
-  if (punch === null) return "it carries no punch list";
+  const punches = paragraphsSaying(body, PUNCH_LIST);
+  const [punch] = punches;
+  if (punch === undefined || punches.length > 1) return `it carries ${punches.length} punch list(s); a table has one`;
   if (JSON.stringify(idsListed(punch)) !== JSON.stringify(punched)) {
     return (
       `its punch list names [${idsListed(punch).join(", ")}]; the verdicts put [${punched.join(", ")}] on ` +

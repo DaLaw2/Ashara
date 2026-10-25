@@ -1,7 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { checkReports, unconfirmedAtPassedSweeps, uncheckedAtPassedSweeps } from "./client-reports.js";
 import type { ReportRecords } from "./client-reports.js";
 import { uncoveredAcceptance } from "./client-report-core.js";
+import { checkTextFacts } from "./text-facts.js";
+import type { TextFactRecords } from "./text-facts.js";
 
 const noRecords: ReportRecords = {
   reports: [],
@@ -49,8 +54,9 @@ describe("checkReports, a halt's cause", () => {
     // Another kind's sentence, or another record's id, is not the cause on record.
     expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(INFRASTRUCTURE, "e1")), "blocked")).toEqual(["halt-cause:fault"]);
     expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(FAULT, "e2")), "blocked")).toEqual(["halt-cause:fault"]);
-    // A sentence reworded by one word is not the oracle's own.
-    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(FAULT.replace("failed", "stopped"), "e1")), "blocked")).toEqual(["halt-cause:fault"]);
+    // A sentence reworded around the same facts states the same cause; one that drops the kind's terms states none.
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated(FAULT.replace("failed", "stopped"), "e1")), "blocked")).toEqual([]);
+    expect(keysOf(haltWith("fault", "MergeFailed", "git exited 1", stated("something went wrong", "e1")), "blocked")).toEqual(["halt-cause:fault"]);
   });
 
   it("names whose spending limit stopped a budget_cap halt from its recorded error class alone, and states its recorded amounts", () => {
@@ -629,5 +635,258 @@ describe("uncoveredAcceptance", () => {
     expect(keys({ ...onlyMarked, visions: [{ ...vision, guarantees: [{ ...guarantees[0], observable: { interface: ["I1"], observation: "stored-data" }, verification: "not-by-ashara" }] }] })).toEqual([
       "no-guarantee",
     ]);
+  });
+});
+
+// A client message is judged by the facts it carries (ids, kinds, amounts, counts, titles), read by a
+// parser that does not depend on the words around them: each fixture below states its facts in words
+// no composer writes, and passes; one wrong id, amount, kind or count, one missing fact, or one added
+// fact that contradicts the record fails by assertion.
+describe("client messages, judged by the facts they carry and never their wording", () => {
+  const causeKeys = (records: ReportRecords): string[] => keysOf(records, "blocked").filter((key) => key.startsWith("halt-cause"));
+
+  describe("a budget_cap halt's cause", () => {
+    const episode = "6f1c2a4e-0b7d-4c55-9a51-2f3e8d9b1c70";
+    const other = "a93d0e12-5c4b-4f7e-8d21-7b6a5c4d3e2f";
+    const spend = { capUsd: 1, spentUsd: 0.412203, inFlightUsd: 0.29854, nextCallUsd: 0.304642 };
+    const cause =
+      "The pause has this cause on record: this project's spending limit had no room left for the next step, which was " +
+      `therefore not paid for. Spent: $0.412203; set aside for work under way: $0.298540; the next step needed up to $0.304642; ` +
+      `the limit is $1.000000. Detail: record ${episode}.`;
+    const halted = (body: string, more: ReportRecords["episodes"] = []): ReportRecords => {
+      const records = haltWith("budget_cap", "BudgetExceeded", "over", `Work is paused.\n\n${body}`);
+      return { ...records, episodes: [...records.episodes.map((each) => ({ ...each, id: episode, spend })), ...more] };
+    };
+
+    it("passes the same facts reworded", () => {
+      expect(causeKeys(halted(cause))).toEqual([]);
+    });
+
+    it("fails a wrong amount, a missing amount, a wrong record, a wrong kind, or a contradicting kind", () => {
+      expect(causeKeys(halted(cause.replace("$0.412203", "$0.412204")))).toEqual(["halt-cause:budget_cap"]);
+      expect(causeKeys(halted(cause.replace("; the limit is $1.000000", "")))).toEqual(["halt-cause:budget_cap"]);
+      expect(causeKeys(halted(cause.replace(episode, other)))).toEqual(["halt-cause:budget_cap"]);
+      expect(causeKeys(halted(cause.replace("spending limit had no room left for", "machines kept failing on")))).toEqual(["halt-cause:budget_cap"]);
+      expect(causeKeys(halted(`${cause} The machines Ashara runs the work on kept failing too.`))).toEqual(["halt-cause:budget_cap"]);
+    });
+
+    it("fails a report that cites another halt's record", () => {
+      const second = { id: other, kind: "fault", errorClass: "X", reason: "y", spend: null, work: null, reportId: null, resumedReportId: null, ended: true, sweepBeforeReport: null };
+      expect(causeKeys(halted(cause, [second]))).toEqual([]);
+      expect(causeKeys(halted(`${cause}\n\nAn earlier pause: record ${other}.`, [second]))).toEqual(["halt-cause:budget_cap"]);
+    });
+  });
+
+  describe("a work_budget halt's cause", () => {
+    const work = { scope: "project", budgetRequests: 600, grantedRequests: 0, reserveRequests: 0, reserveProtected: false, spentRequests: 599, inFlightRequests: 1, bySite: [{ callSite: "agent", requests: 600 }] };
+    const cause =
+      "Recorded cause: this project's budget of model requests was used up, so the next step was not sent. Sent: 599 model " +
+      'requests, 1 more under way, of a budget of 600 model requests. Drawn by step: "agent" 600. Detail in record e1.';
+    const halted = (body: string): ReportRecords => {
+      const records = haltWith("work_budget", "WorkBudgetSpent", "spent", `Work is paused.\n\n${body}`);
+      return { ...records, episodes: records.episodes.map((each) => ({ ...each, work })) };
+    };
+
+    it("passes the same figures reworded, and fails a wrong count, a wrong call site or a missing figure", () => {
+      expect(causeKeys(halted(cause))).toEqual([]);
+      expect(causeKeys(halted(cause.replace("Sent: 599", "Sent: 598")))).toEqual(["halt-cause:work_budget"]);
+      expect(causeKeys(halted(cause.replace('"agent" 600', '"agent-runner" 600')))).toEqual(["halt-cause:work_budget"]);
+      expect(causeKeys(halted(cause.replace(", 1 more under way", "")))).toEqual(["halt-cause:work_budget"]);
+    });
+  });
+
+  describe("a halt recorded with no cause", () => {
+    it("passes a reworded statement that none was recorded, and fails one citing a record or saying nothing of it", () => {
+      expect(causeKeys(haltWith("fault", null, null, "Work is paused.\n\nThere is no cause on record for this pause."))).toEqual([]);
+      expect(causeKeys(haltWith("fault", null, null, "Work is paused.\n\nNo cause was recorded; see record e1."))).toEqual(["halt-cause:fault"]);
+      expect(causeKeys(haltWith("fault", null, null, "Work is paused."))).toEqual(["halt-cause:fault"]);
+    });
+  });
+
+  describe("a plan_repair halt's given-up tasks", () => {
+    const repairing = (line: string): ReportRecords => ({
+      ...haltWith("plan_repair", null, null, `Work has stopped.\n\n${line}`),
+      repairs: [
+        { episodeId: "e1", workItemId: "w1", title: "Goal", attempts: 3, blockedReason: { source: "task_failed", reason: "task_failed" } },
+        { episodeId: "e9", workItemId: "w2", title: "Other", attempts: 1, blockedReason: { source: "task_failed", reason: "x" } },
+      ],
+    });
+    const line = `- "Goal": given up after 3 attempts; its attempts at the work did not succeed (record w1).`;
+
+    it("passes the same title, record, attempts and category reworded", () => {
+      expect(causeKeys(repairing(line))).toEqual([]);
+    });
+
+    it("fails a wrong record, a wrong count, a wrong category, a missing category or another task's record", () => {
+      expect(causeKeys(repairing(line.replace("record w1", "record w2")))).toEqual(["halt-cause:plan_repair"]);
+      expect(causeKeys(repairing(line.replace("3 attempts", "2 attempts")))).toEqual(["halt-cause:plan_repair"]);
+      expect(causeKeys(repairing(line.replace("its attempts at the work did not succeed", "the machines were not available for it")))).toEqual(["halt-cause:plan_repair"]);
+      expect(causeKeys(repairing(line.replace("; its attempts at the work did not succeed", "")))).toEqual(["halt-cause:plan_repair"]);
+      expect(causeKeys(repairing(line.replace("(record w1)", "(record w1, record w2)")))).toEqual(["halt-cause:plan_repair"]);
+    });
+  });
+
+  describe("a burn warning", () => {
+    const warning = { planRevision: 1, zone: "yellow", drawnRequests: 230, budgetRequests: 600, reserveRequests: 150, upstreamRequests: 450, plannedTasks: 4, completedTasks: 1, reportId: "w1", operatorReport: null, ledgerRequests: 240 };
+    const body =
+      "Model requests are running ahead of the finished work.\n\nSent so far: 230 of the 450 model requests this project's work " +
+      "may use; a further 150 are reserved for checking the finished work. Finished: 1 of 4 building tasks.";
+    const warned = (text: string): ReportRecords => ({
+      ...noRecords,
+      reports: [{ id: "w1", body: text, reportsOn: null, inReplyTo: null, visionAtReport: null }],
+      burnWarnings: [warning],
+    });
+
+    it("passes the same figures reworded, and fails a wrong figure, a missing figure or an added one", () => {
+      expect(keysOf(warned(body), "active")).toEqual([]);
+      expect(keysOf(warned(body.replace("230 of", "231 of")), "active")).toEqual(["burn-warning"]);
+      expect(keysOf(warned(body.replace("; a further 150 are reserved for checking the finished work", "")), "active")).toEqual(["burn-warning"]);
+      expect(keysOf(warned(`${body} Another 999 were sent.`), "active")).toEqual(["burn-warning"]);
+    });
+  });
+
+  describe("a message with no contract on record", () => {
+    const told = (table: string): ReportRecords => {
+      const records = haltWith("budget_cap", null, null, "");
+      return { ...records, reports: records.reports.map((each) => ({ ...each, body: `Work is paused.\n\nNo cause was recorded.${table}` })) };
+    };
+    const tableKeys = (records: ReportRecords): string[] => keysOf(records, "blocked").filter((key) => key.startsWith("guarantee-table"));
+
+    it("passes no vision version and no guarantee reworded, at its sweep", () => {
+      expect(tableKeys(told("\n\nThere is no contract on record for this project (sweep t1), so nothing is judged."))).toEqual([]);
+    });
+
+    it("fails another sweep, no such statement, a vision version or a guarantee judged", () => {
+      expect(tableKeys(told("\n\nThere is no contract on record for this project (sweep t2), so nothing is judged."))).toEqual(["guarantee-table:halt:budget_cap"]);
+      expect(tableKeys(told(""))).toEqual(["guarantee-table:halt:budget_cap"]);
+      expect(tableKeys(told("\n\nThere is no contract on record (sweep t1, vision v1), so nothing is judged."))).toEqual(["guarantee-table:halt:budget_cap"]);
+      expect(tableKeys(told("\n\nThere is no contract on record (sweep t1), so nothing is judged.\n\nJudged:\n- G1: s | verdict: pass"))).toEqual([
+        "guarantee-table:halt:budget_cap",
+      ]);
+    });
+  });
+
+  describe("a delivered report", () => {
+    const goal = { id: "t1", title: "Goal", status: "Completed", level: "Task", workKind: null, origin: "decomposition", mergeCommit: "c1", mergeKind: "merged", blockedReason: null };
+    const checkTask = { ...goal, id: "t9", title: "Check", origin: "check", mergeCommit: "c9" };
+    const delivered = (body: string): ReportRecords => ({
+      ...noRecords,
+      reports: [{ id: "r1", body: `The project is delivered.\n\n${body}${noContract("s1")}`, reportsOn: null, inReplyTo: null, visionAtReport: null }],
+      sweeps: [{ id: "s1", passed: true, uncheckedTasks: [], reportId: "r1", reportFailures: 0 }],
+      tableSweeps: [{ id: "s1", blockId: null, stopId: null, mainCommit: "m1", visionAtSweep: null }],
+    });
+    const closeKeys = (body: string, items: Parameters<typeof checkReports>[2] = [goal, checkTask]): string[] => keysOf(delivered(body), "accepted", items);
+
+    it("passes a goal's close reworded, and fails a wrong commit, a wrong close, a missing commit or another task's commit", () => {
+      expect(closeKeys(`Built:\n- "Goal": merged into main as commit c1.`)).toEqual([]);
+      expect(closeKeys(`Built:\n- "Goal": merged into main as commit c2.`)).toEqual(["delivered-close"]);
+      expect(closeKeys(`Built:\n- "Goal": already delivered on commit c1.`)).toEqual(["delivered-close"]);
+      expect(closeKeys(`Built:\n- "Goal": merged into main.`)).toEqual(["delivered-close"]);
+      expect(closeKeys(`Built:\n- "Goal": merged into main as commit c1, with c9.`)).toEqual(["delivered-close"]);
+    });
+
+    it("passes the given-up and unchecked lists reworded, and fails a wrong or a missing title", () => {
+      const gaveUp = { ...goal, id: "t3", title: "Hard", status: "Abandoned", mergeCommit: null, mergeKind: null, blockedReason: { source: "failure_given_up", reason: "x" } };
+      const close = `Built:\n- "Goal": merged into main as commit c1.`;
+      expect(closeKeys(`${close}\n\nGiven up, with the plan revised around them:\n- "Hard"`, [goal, gaveUp])).toEqual([]);
+      expect(closeKeys(`${close}\n\nGiven up, with the plan revised around them:\n- "Hardly"`, [goal, gaveUp])).toEqual(["delivered-given-up"]);
+      expect(closeKeys(close, [goal, gaveUp])).toEqual(["delivered-given-up"]);
+      const unchecked = { ...goal, id: "t4", title: "Bare", origin: "decomposition", workKind: "implementation", mergeCommit: null, mergeKind: null };
+      const records = (body: string): ReportRecords => {
+        const base = delivered(body);
+        return { ...base, sweeps: base.sweeps.map((each) => ({ ...each, uncheckedTasks: ["t4"] })) };
+      };
+      const items = [goal, unchecked];
+      const lines = `${close}\n- "Bare": closed with no commit on record.`;
+      expect(keysOf(records(`${lines}\n\nDone, but not checked by any stored check:\n- "Bare"`), "accepted", items)).toEqual([]);
+      expect(keysOf(records(`${lines}\n\nDone, but not checked by any stored check:\n- "Goal"`), "accepted", items)).toEqual(["delivered-unchecked"]);
+    });
+  });
+
+  describe("a stop report", () => {
+    const items = [
+      { id: "t1", title: "Goal", status: "Completed", level: "Task", workKind: null, origin: "decomposition", mergeCommit: "c1", mergeKind: "merged", blockedReason: null },
+      { id: "t2", title: "Second", status: "Completed", level: "Task", workKind: null, origin: "decomposition", mergeCommit: "c2", mergeKind: "merged", blockedReason: null },
+    ];
+    const stopped = (lines: string): ReportRecords => ({
+      ...noRecords,
+      reports: [{ id: "r1", body: `Stopped as you asked.\n\nOn main now:\n${lines}${noContract("t1")}`, reportsOn: "client-stop", inReplyTo: "m1", visionAtReport: null }],
+      tableSweeps: [{ id: "t1", blockId: null, stopId: "m1", mainCommit: null, visionAtSweep: null }],
+      stopSweepsBeforeReport: ["t1"],
+    });
+    const stopKeys = (lines: string): string[] => keysOf(stopped(lines), "stopped", items).filter((key) => key === "stop-merges");
+
+    it("passes the merges reworded, and fails a wrong commit, a missing merge or another task's commit", () => {
+      expect(stopKeys(`- "Goal": on main at c1\n- "Second": on main at c2`)).toEqual([]);
+      expect(stopKeys(`- "Goal": on main at c3\n- "Second": on main at c2`)).toEqual(["stop-merges"]);
+      expect(stopKeys(`- "Goal": on main at c1`)).toEqual(["stop-merges", "stop-merges"]);
+      expect(stopKeys(`- "Goal": on main at c1 and c2\n- "Second": on main at c2`)).toEqual(["stop-merges"]);
+    });
+  });
+
+  describe("intake's messages", () => {
+    const noText: TextFactRecords = {
+      visions: [],
+      briefs: [],
+      questions: [],
+      answerReplies: [],
+      tenderReports: [],
+      declines: [],
+      delivered: [],
+      firstPlan: { report: null, items: [], revisions: [] },
+      workItems: 0,
+      interfaceOnMain: { kind: "not-held" },
+      placeholderOnMain: { kind: "not-held" },
+      intakeReading: { confirmation: "not-needed", secondStrength: null, secondQuestions: null },
+    };
+    const textKeys = (records: Partial<TextFactRecords>): string[] => checkTextFacts({ ...noText, ...records }).map((each) => each.key);
+
+    it("passes a decline reworded, and fails one missing a fact of it", () => {
+      const decline =
+        "We cannot verify any guarantee of this contract as written. Please restate them so one is seen in what the product " +
+        "shows; confirming it as written does not start work.";
+      expect(textKeys({ declines: [{ id: "d1", body: decline }] })).toEqual([]);
+      expect(textKeys({ declines: [{ id: "d1", body: decline.replace("Please restate them so", "So") }] })).toEqual(["declined-message:1"]);
+    });
+
+    it("passes work not started reworded on a declined contract, and fails one missing it or saying work is under way", () => {
+      const declined = { version: 1, inferences: [], openQuestions: [], guarantees: [{ id: "G1", statement: "s", source: { kind: "tender", quote: "s" }, verification: "not-by-ashara" }], interface: [] };
+      const intakeKeys = (body: string): string[] =>
+        textKeys({ visions: [declined], tenderReports: [{ id: "r1", body }] }).filter((key) => key.startsWith("declined-intake"));
+      expect(intakeKeys("Your tender is read. Nothing has begun: work has not started on this contract.")).toEqual([]);
+      expect(intakeKeys("Your tender is read.")).toEqual(["declined-intake:1"]);
+      expect(intakeKeys("Your tender is read. Work has not started; meanwhile work proceeds on the draft.")).toEqual(["declined-intake:1"]);
+    });
+
+    it("passes a tender reading reworded, and fails a wrong strength, a wrong count or a contradicting outcome", () => {
+      const confirmed = { confirmation: "confirmed", secondStrength: "same-model", secondQuestions: 0 };
+      const said = "Reading your tender found nothing to ask you; a second reading, by the same model as the first, found nothing to ask either.";
+      const reading = (intakeReading: TextFactRecords["intakeReading"], body: string): string[] => textKeys({ intakeReading, tenderReports: [{ id: "r2", body }] });
+      expect(reading(confirmed, said)).toEqual([]);
+      expect(reading(confirmed, said.replace("the same model as the first", "another model family"))).toEqual(["reading-report"]);
+      const raised = { confirmation: "questions-raised", secondStrength: "other-family", secondQuestions: 2 };
+      const asked = "The first reading of your tender found nothing to ask; a second, by another model family, raised 2 questions, sent to you.";
+      expect(reading(raised, asked)).toEqual([]);
+      expect(reading(raised, asked.replace("raised 2", "raised 3"))).toEqual(["reading-report"]);
+      expect(reading(raised, `${asked} It found nothing to ask either.`)).toEqual(["reading-report"]);
+    });
+  });
+});
+
+// The oracles above hold no expected whole sentence: none composes the words it expects a message to
+// say, and none searches a message for a sentence it composed; each reads facts through the parser.
+describe("the client-message oracles", () => {
+  it("compose no expected sentence and search no message body for one", () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const oracles = fs.readdirSync(here).filter((name) => (/^client-report.*\.ts$/.test(name) || name === "text-facts.ts") && !name.endsWith(".test.ts"));
+    expect(oracles).toEqual(expect.arrayContaining(["client-report-halt.ts", "client-report-burn.ts", "client-report-core.ts", "text-facts.ts"]));
+    const sentenceMatch = /\bexpected\w*Words\b|\bbody\.(includes|startsWith|endsWith)\(|\bsaid\.includes\(|\bparagraph\(\w+\.body, "/;
+    const found = oracles.flatMap((name) =>
+      fs
+        .readFileSync(path.join(here, name), "utf8")
+        .split("\n")
+        .flatMap((line, i) => (sentenceMatch.test(line) ? [`${name}:${i + 1}: ${line.trim()}`] : [])),
+    );
+    expect(found).toEqual([]);
   });
 });

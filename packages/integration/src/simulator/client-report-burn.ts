@@ -1,4 +1,4 @@
-import { requestCount } from "./client-report-core.js";
+import { countsOf, figuresOf, paragraphsOf } from "./client-message-facts.js";
 import type { ReportAdd, ReportsById } from "./client-report-core.js";
 import type { ReportRecords } from "./client-reports.js";
 
@@ -6,23 +6,24 @@ import type { ReportRecords } from "./client-reports.js";
 type BurnWarning = ReportRecords["burnWarnings"][number];
 
 /**
- * The sentences a burn warning's report must carry, from its recorded figures, written here: what was
- * sent of what the project's work may use, the reserve when there is one, and what of the plan is done.
+ * The figures a burn warning's report must state, from its record, in the order the record lists
+ * them: what was sent of what the project's work may use, the reserve when there is one, and what of
+ * the plan is done when any task is planned.
  */
-function expectedBurnFigures(warning: BurnWarning): string {
-  const reserve =
-    warning.reserveRequests > 0
-      ? ` A further ${requestCount(warning.reserveRequests)} of its budget are set aside for checking and ` +
-        `accepting the finished work, and only that checking may use them.`
-      : "";
-  const done =
-    warning.plannedTasks === 0
-      ? "No building task of the current plan is planned yet, so none of it is finished."
-      : `${warning.completedTasks} of the ${warning.plannedTasks} building tasks of the current plan are finished.`;
-  return (
-    `So far ${requestCount(warning.drawnRequests)} have been sent, of the ` +
-    `${requestCount(warning.upstreamRequests)} this project's work may use before it pauses.${reserve} ${done}`
-  );
+function expectedBurnFigures(warning: BurnWarning): number[] {
+  return [
+    warning.drawnRequests,
+    warning.upstreamRequests,
+    ...(warning.reserveRequests > 0 ? [warning.reserveRequests] : []),
+    ...(warning.plannedTasks === 0 ? [] : [warning.completedTasks, warning.plannedTasks]),
+  ];
+}
+
+/** The figures a report states in the paragraphs that count model requests: where a burn warning tells its record. */
+function statedBurnFigures(body: string): number[] {
+  return paragraphsOf(body)
+    .filter((part) => countsOf(part, "model request").length > 0)
+    .flatMap((part) => figuresOf(part));
 }
 
 /**
@@ -76,12 +77,13 @@ export function checkBurnWarnings(records: ReportRecords, byId: ReportsById, add
       );
     }
     const report = byId.get(warning.reportId);
-    const figures = expectedBurnFigures(warning);
-    if (report === undefined || !report.body.includes(figures)) {
+    const expected = expectedBurnFigures(warning);
+    const stated = report === undefined ? null : statedBurnFigures(report.body);
+    if (stated === null || stated.join(",") !== expected.join(",")) {
       add(
         "burn-warning",
-        `the ${at}'s report does not state "${figures.slice(0, 200)}"; it reads ` +
-          `"${report?.body.slice(0, 200) ?? "no report"}"`,
+        `the ${at}'s report states the figures [${stated === null ? "none: no report" : stated.join(", ")}]; ` +
+          `its record holds [${expected.join(", ")}]`,
       );
     }
     const operatorFigures =
