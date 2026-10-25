@@ -7,7 +7,7 @@ import { salvagedReason } from "./salvaged-result.js";
 import type { WorkItem } from "./work-item.js";
 import type { WorkItemRepository } from "./repository.js";
 import { LifecycleRouter } from "./router.js";
-import { inertWorkItemRepo } from "../testing.js";
+import { inertWorkItemRepo } from "./testing.js";
 
 // Minimal in-memory repo for testing cascade-completion through deliveredItsWork.
 function buildInMemoryRepo(items: WorkItem[]): WorkItemRepository {

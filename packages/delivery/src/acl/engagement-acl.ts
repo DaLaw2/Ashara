@@ -2,8 +2,7 @@ import { TERMINAL_KINDS, VisionChangeRefused, VisionUnreadable, plannedBehaviour
 import type { StoredVision, VisionVersion } from "@ashara/engagement";
 import type { AssignmentVision } from "@ashara/workplace";
 import { ASSUMPTION_KIND_LABEL, ASSUMPTION_STANDING_LABEL } from "./engagement-vision-acl.js";
-import type { InterfaceEntry, VisionGuarantee } from "./engagement-vision-acl.js";
-import type { VisionItem } from "../decomposition-types.js";
+import type { InterfaceEntry, VisionGuarantee, VisionSource } from "./engagement-vision-acl.js";
 
 /**
  * Anti-Corruption Layer: Engagement.
@@ -60,7 +59,7 @@ export interface PlanningVision {
   /** The client's tender, verbatim. */
   readonly visionText: string;
   readonly northStar: string;
-  readonly items: VisionItem[];
+  readonly items: VisionSource[];
   /** The product's public interface as the vision states it, each entry by its key; empty on a version that recorded none. */
   readonly interface: ReadonlyArray<{ readonly id: string; readonly text: string }>;
   /**
@@ -107,10 +106,10 @@ function northStarOf(vision: VisionVersion): string {
  * The summary is not an item: it restates the whole tender, so a task tracing to it would trace to
  * nothing in particular.
  */
-function visionItemsOf(vision: VisionVersion): VisionItem[] {
+function visionItemsOf(vision: VisionVersion): VisionSource[] {
   const guaranteeIds = new Set(vision.guarantees.map((g) => g.id));
   return [
-    ...vision.guarantees.map((g: VisionGuarantee): VisionItem => ({
+    ...vision.guarantees.map((g: VisionGuarantee): VisionSource => ({
       type: "guarantee",
       id: g.id,
       text: g.statement,
@@ -118,7 +117,7 @@ function visionItemsOf(vision: VisionVersion): VisionItem[] {
       interface: [...g.interface],
       refutedBy: [...g.refutedBy],
     })),
-    ...vision.assumptions.filter((a) => !guaranteeIds.has(a.id)).map((a): VisionItem => ({
+    ...vision.assumptions.filter((a) => !guaranteeIds.has(a.id)).map((a): VisionSource => ({
       type: "assumption",
       id: a.id,
       text: a.statement,

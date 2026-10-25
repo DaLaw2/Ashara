@@ -1,14 +1,11 @@
-import type { EventStoreRepository } from "@ashara/db";
-import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
+import type { ProjectId, StepContainment } from "@ashara/shared";
 import type { ProjectBlockCause } from "./project-halt.js";
-import type { WorkItemRepository, PlanningService } from "./domain/index.js";
-import type { FailureRecoveryDeps } from "./lifecycle/failure-recovery.js";
+import type { PlanningService } from "./domain/index.js";
 import type { FirstPlanning } from "./first-plan.js";
 import type { Replanning } from "./replan-port.js";
-import type { FailedApproachRepository } from "./acl/knowledge-acl.js";
-import type { AcceptanceSweeper, NewCheckDispute, TerminalSweeper } from "./acl/quality-acl.js";
-import type { DispatchService } from "./dispatch/dispatch-service.js";
+import type { AcceptanceSweeper, TerminalSweeper } from "./acl/quality-acl.js";
 import type { WorkspacePathStore } from "./task-helpers.js";
+import type { DispatchLoop, SpendRefusals, TaskDispatchSteps, TaskResult } from "./execution/dispatch-run-deps.js";
 import type { SettledTargets } from "./settled-branches.js";
 import type {
   LiaisonAnswers,
@@ -21,15 +18,13 @@ import type {
   LiaisonIntake,
   LiaisonPlanReports,
   LiaisonStackChoices,
-  TaskQuestion,
-  TaskQuestionPosting,
 } from "./acl/engagement-acl.js";
 import type { AcceptanceStore } from "./acceptance.js";
 import type { TerminalSweepStore } from "./terminal-sweep.js";
 import type { ClientWaitHalts } from "./client-wait-halts.js";
 import type { InfrastructureHalts, InfrastructureProbe } from "./infrastructure-halts.js";
 import type { RosterDerivationStep } from "./acl/organization-acl.js";
-import type { SpendAtCap, SpendRefusal } from "./acl/finance-acl.js";
+import type { SpendAtCap } from "./acl/finance-acl.js";
 
 export interface CoreLoopConfig {
   readonly workdirBase: string;
@@ -66,47 +61,8 @@ export interface CycleResult {
  * refusal names at its cap; a deployment refusal, or recorded spend at the deployment cap, halts
  * every active project at the cap and stops the loop.
  */
-interface SpendCapPort {
+interface SpendCapPort extends SpendRefusals {
   deploymentStop(): Promise<LoopStop | null>;
-  refusalOf(error: unknown): SpendRefusal | null;
-}
-
-/**
- * A model call refused before it was sent by anything but a spend cap (an unpriced model, a cost
- * that cannot be estimated): a configuration fault the owner fixes, so the project is blocked
- * with the refusal's class. A re-dispatch would meet the same configuration.
- */
-interface ConfigurationRefusal {
-  readonly kind: "configuration";
-  readonly projectId: string;
-  readonly errorClass: string;
-  readonly reason: string;
-}
-
-export type TaskRefusal = SpendRefusal | ConfigurationRefusal;
-
-export type TaskResult =
-  | { readonly taskId: string; readonly status: "completed" | "failed" | "blocked"; readonly detail: string }
-  /**
-   * A model call of the dispatch was refused before it was sent: the item is back at Pending with
-   * its dispatch refunded, no lesson and no failure router. A deployment refusal stops the loop with
-   * its reason; a configuration refusal has blocked the project.
-   */
-  | { readonly taskId: string; readonly status: "refused"; readonly detail: string; readonly refusal: TaskRefusal }
-  /** The process's shutdown interrupted the attempt: the item is back at Pending with its dispatch refunded. */
-  | { readonly taskId: string; readonly status: "interrupted"; readonly detail: string };
-
-/** `detail` is the dispatch's own account of what it delivered, which claims no verification it did not run. */
-export function completedResult(taskId: string, detail: string): TaskResult {
-  return { taskId, status: "completed", detail };
-}
-
-export function failedResult(taskId: string, detail: string): TaskResult {
-  return { taskId, status: "failed", detail };
-}
-
-export function blockedResult(taskId: string, detail: string): TaskResult {
-  return { taskId, status: "blocked", detail };
 }
 
 /**
@@ -136,14 +92,10 @@ interface CycleComplete {
  * The loop's own runtime and the board every step group reads: its config, logs, work items, events,
  * projects, the spend cap and the containment of each step's faults.
  */
-export interface LoopCore {
+export interface LoopCore extends DispatchLoop {
   readonly config: CoreLoopConfig;
   /** Where each cycle's tally is written: the server log's event writer. */
   readonly cycleLog: { emit(event: CycleComplete): void };
-  /** Each dispatched attempt runs in its own trace on it, carrying its task and attempt number. */
-  readonly logger: Logger;
-  readonly workItemRepo: WorkItemRepository;
-  readonly eventStore: Pick<EventStoreRepository, "publish">;
   /**
    * Holds each project's target workspace path and its status:
    * the gate admits only active projects' tasks and blocks a project with a bad
@@ -206,42 +158,8 @@ interface PlanningSteps {
   readonly replanning: Replanning;
 }
 
-/**
- * The client's channel for a decision only the client can make, which Engagement keeps: `ask` posts a
- * task's question to the client, as intake's questions are posted, and `answered` says whether the
- * client's answer to one has been read.
- */
-export interface ClientQuestions {
-  ask(question: TaskQuestion): Promise<TaskQuestionPosting>;
-  answered(questionId: string): Promise<boolean>;
-}
-
 /** A task's dispatch, the routing of its result, and the cells and substrate its attempts run on. */
-export interface DispatchSteps {
-  readonly dispatchService: Pick<DispatchService, "execute">;
-  readonly failedApproachRepo: Pick<FailedApproachRepository, "record">;
-  readonly failureRouter: FailureRecoveryDeps["failureRouter"];
-  /** Quality's durable record of check disputes: their count per check task bounds the reopens. */
-  readonly checkDisputes: CheckDisputeRecord;
-  /**
-   * Quality's durable record of the reviews of plan revisions' suites:
-   * how many reviews named each check task bounds its reopens.
-   */
-  readonly suiteReviewFindings: SuiteReviewFindingRecord;
-  /**
-   * Quality's freeze of a plan revision's check set, run at every dispatch before it is counted: the
-   * first implementation dispatched on a review's check set freezes it, so no later review of that
-   * set reopens anything.
-   */
-  readonly checkSetFreeze: CheckSetFreeze;
-  /**
-   * The roster role doing a project's environment work, from its latest roster: the owner of the
-   * environment task an implementation's request opens. `none`, with
-   * why, when the roster names no such role; a roster that cannot be read throws.
-   */
-  readonly environmentOwner: (projectId: ProjectId) => Promise<EnvironmentOwner>;
-  /** Where a task blocked on a decision only the client can make has its question posted, and its answer read. */
-  readonly clientQuestions: ClientQuestions;
+export interface DispatchSteps extends TaskDispatchSteps {
   /**
    * Removes every cell this process still holds, run each cycle before anything is dispatched: no
    * attempt is in flight then, so each one held is a cell whose teardown failed. Never throws.
@@ -302,9 +220,6 @@ export interface CoreLoopDeps {
   readonly reporting: ReportingSteps;
 }
 
-/** What one task's dispatch and the routing of its result run on: the loop's own board and the dispatch steps. */
-export type DispatchRunDeps = Pick<CoreLoopDeps, "loop" | "dispatch">;
-
 /** The members of each step group a caller supplies in place of what a builder of CoreLoopDeps makes. */
 export type CoreLoopOverrides = { readonly [Group in keyof CoreLoopDeps]?: Partial<CoreLoopDeps[Group]> };
 
@@ -341,37 +256,3 @@ export type TaskLanes = <I extends { readonly id: string }, T>(
   next: () => Promise<I | null>,
   run: (item: I) => Promise<T>,
 ) => Promise<Array<LaneSettlement<I, T>>>;
-
-/** Who does a project's environment work, as the latest roster says. */
-type EnvironmentOwner = { readonly kind: "role"; readonly roleId: string } | { readonly kind: "none"; readonly why: string };
-
-/** Appends a dispute; resolves to the disputes its check task has drawn, this one included. */
-interface CheckDisputeRecord {
-  record(dispute: NewCheckDispute): Promise<number>;
-}
-
-/** One review of a plan revision's suites that found problems, as its dispatch ended with it. */
-interface SuiteReviewFindingsEntry {
-  readonly projectId: string;
-  readonly reviewTaskId: string;
-  readonly problems: ReadonlyArray<{
-    readonly checkTaskIds: readonly string[];
-    readonly kind: "contradiction" | "outside-vision" | "undecided-item" | "breaks-contract";
-    readonly problem: string;
-    readonly evidence: string;
-  }>;
-}
-
-/** Appends the findings; resolves, per named check task, to how many reviews have named it, this one included. */
-interface SuiteReviewFindingRecord {
-  record(findings: SuiteReviewFindingsEntry): Promise<{ readonly timesNamed: ReadonlyMap<string, number> }>;
-}
-
-/**
- * Quality's freeze of a plan revision's check set: freezes the check set of
- * every review task the dispatched task depends on that is not frozen yet, and resolves to the review
- * tasks it froze. A task that depends on no review freezes nothing.
- */
-interface CheckSetFreeze {
-  freezeFor(taskId: string): Promise<readonly string[]>;
-}

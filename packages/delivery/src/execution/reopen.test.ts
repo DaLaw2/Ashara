@@ -7,7 +7,7 @@ import { requeueWorkItem, startWorkItem, takeEvents } from "../domain/index.js";
 import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import type { ItemWrite, ReopenPlan, ReopenRoute } from "./reopen.js";
 import { reopen } from "./reopen.js";
-import { inertWorkItemRepo } from "../testing.js";
+import { inertWorkItemRepo } from "../domain/testing.js";
 
 const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 

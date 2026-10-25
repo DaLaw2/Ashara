@@ -9,8 +9,8 @@ import { recordFailedApproach } from "../acl/knowledge-acl.js";
 import type { FailureVerdict } from "../acl/quality-acl.js";
 import { cellExecInterruptedOf } from "../acl/execution-infra-acl.js";
 import { toRecordedOutcome } from "../acl/workplace-acl.js";
-import type { DispatchRunDeps, LoopCore, TaskResult } from "../types.js";
-import { blockedResult } from "../types.js";
+import type { DispatchLoop, DispatchRunDeps, TaskResult } from "./dispatch-run-deps.js";
+import { blockedResult } from "./dispatch-run-deps.js";
 import type { TaskDescriptor } from "../dispatch/dispatch-types.js";
 import { findEpicId, resolveTargetProjectPath } from "../task-helpers.js";
 import { publishBestEffort } from "./audit-events.js";
@@ -88,7 +88,7 @@ class FailureVerdictMissing extends Error {
  * processTask — the item is already terminal and the agent spend is sunk.
  */
 async function salvagePreemptedResult(
-  deps: Pick<LoopCore, "workItemRepo" | "logger">,
+  deps: Pick<DispatchLoop, "workItemRepo" | "logger">,
   item: WorkItem,
   outcome: "completed" | "failed" | "blocked",
   detail: string,

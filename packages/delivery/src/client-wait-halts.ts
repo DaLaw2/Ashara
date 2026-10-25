@@ -1,7 +1,7 @@
 import type { Logger, ProjectId, StepContainment } from "@ashara/shared";
 import { containEach } from "@ashara/shared";
 import type { WorkItemRepository } from "./domain/index.js";
-import type { ClientQuestions } from "./types.js";
+import type { ClientQuestions } from "./execution/dispatch-run-deps.js";
 
 // The automatic exit of a project halted on client_wait (parked-exits.ts halts it once no work of it
 // could proceed but on the client's answers): the client answers, the Liaison reads the answer as it

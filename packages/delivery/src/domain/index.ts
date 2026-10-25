@@ -34,7 +34,7 @@ export { salvagedReason } from "./salvaged-result.js";
 export { giveUpAcceptanceDefect, openAcceptanceDefect } from "./acceptance.js";
 export type { InterfaceDefect, PlaceholderDefect } from "./acceptance.js";
 
-export type { ActiveProjects, LockedChargeLedger, WorkItemRepository } from "./repository.js";
+export type { ActiveProjects, WorkItemRepository } from "./repository.js";
 
 export { PlanningService } from "./service.js";
 export { TaskHeldForCorrection, startUnlessHeld } from "./gate.js";

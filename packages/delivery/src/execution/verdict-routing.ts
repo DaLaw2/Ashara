@@ -6,8 +6,8 @@ import { InvalidStatusTransition, canTransitionTo } from "../work-item-language/
 import type { WorkItem } from "../domain/index.js";
 import { PlanningService, failWorkItem, takeEvents } from "../domain/index.js";
 import type { ExecutionResult, FailureVerdict } from "../acl/quality-acl.js";
-import type { TaskRefusal, TaskResult } from "../types.js";
-import { blockedResult, completedResult, failedResult } from "../types.js";
+import type { TaskRefusal, TaskResult } from "./dispatch-run-deps.js";
+import { blockedResult, completedResult, failedResult } from "./dispatch-run-deps.js";
 import { chargeInfrastructureFault } from "../infrastructure-fault.js";
 import { publishBestEffort } from "./audit-events.js";
 import { configurationRefusal, workBudgetGiveUp } from "./give-up-causes.js";

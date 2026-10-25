@@ -1,6 +1,6 @@
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import type { WorkItem } from "../domain/index.js";
-import type { TaskRefusal } from "../types.js";
+import type { TaskRefusal } from "./dispatch-run-deps.js";
 import { projectBlockCause } from "../project-halt.js";
 
 /** Every cause a dispatch's routing gives a task up for, after which its plan is repaired. */

@@ -243,7 +243,28 @@ restrict.finance = ["src/acl/*.ts", "src/dispatch/*.ts"]
 # unprepared conflict retry it raises and reads.
 classes.quality = ["ConflictRetryUnprepared", "VerificationInfrastructureFault"]
 # Its inert test builders: only a test or the test harness imports them, so no production loop is built on one.
-test-only-subpaths = ["testing"]
+# The board's own (an inert work-item repository) sit in the board, so a test of any module reads
+# them without importing the loop the loop's builders compose.
+test-only-subpaths = ["testing", "board-testing"]
+# Its modules by business purpose. The board is the work items, their language and transitions, the
+# project's halt and its planning record, and the predicates every reader admits a project or a task
+# by: the halt's end resets the planning record in the transaction that ends it, so both sit with the
+# halt. Planning writes the first plan and each revision on the board, and publishes the board's and
+# the plans' reads. Dispatch runs one task's attempt and routes its verdict: the failure router, the
+# infrastructure fault charged to a task, a merge left on main and the parked exits. The loop is the
+# process manager: its cycle steps in order, the sweeps and halts it runs between them, its
+# dependency record, the startup reconciliation and its test builders. The loop reads planning and
+# dispatch, and each of them reads only the board; neither reads the other or the loop.
+module.acl      = ["src/acl/*.ts"]
+module.board    = ["src/domain/*.ts", "src/work-item-language/*.ts", "src/lifecycle/ports.ts", "src/project-halt.ts", "src/predicates.ts", "src/repositories/work-item.ts", "src/repositories/work-item-adapter.ts", "src/repositories/citation.ts", "src/repositories/project-lock.ts", "src/repositories/project-halt.ts", "src/repositories/project-plan.ts"]
+module.planning = ["src/decomposition.ts", "src/decomposition-types.ts", "src/gateway-adapters.ts", "src/model-schemas.ts", "src/first-plan.ts", "src/bulk-plan.ts", "src/replan.ts", "src/replan-port.ts", "src/replan-prompts.ts", "src/revision-*.ts", "src/stores/*.ts", "src/repositories/first-plan.ts", "src/repositories/replan.ts", "src/repositories/plan-report.ts", "src/published-reads.ts"]
+module.dispatch = ["src/dispatch/*.ts", "src/execution/*.ts", "src/staffing.ts", "src/task-helpers.ts", "src/failure-router.ts", "src/lifecycle/failure-recovery.ts", "src/infrastructure-fault.ts", "src/orphan-merge.ts", "src/requeue-on-main.ts", "src/parked-exits.ts"]
+module.loop     = ["src/core-loop.ts", "src/types.ts", "src/runner.ts", "src/startup-reconciler.ts", "src/acceptance.ts", "src/terminal-sweep.ts", "src/settled-branches.ts", "src/client-wait-halts.ts", "src/infrastructure-halts.ts", "src/repositories/step-containment.ts", "src/testing.ts"]
+module.entry    = ["src/index.ts"]
+module-allow.board    = ["acl"]
+module-allow.planning = ["board", "acl"]
+module-allow.dispatch = ["board", "acl"]
+module-allow.loop     = ["planning", "dispatch", "board", "acl"]
 
 # --- Evaluation, outside the builder ----------------------------------------------------------
 

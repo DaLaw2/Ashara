@@ -11,7 +11,8 @@
     "./predicates": "./src/predicates.ts",
     "./reads": "./src/published-reads.ts",
     "./work-item": "./src/work-item-language/index.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./board-testing": "./src/domain/testing.ts"
   },
   "dependencies": {
     "@ashara/db": "*",

@@ -13,7 +13,7 @@ import { InvalidStatusTransition } from "./work-item-language/transitions.js";
 import type { WorkItem, WorkItemRepository } from "./domain/index.js";
 import type { ProjectBlockCause } from "./project-halt.js";
 import { releaseClearedBlocks } from "./parked-exits.js";
-import { inertWorkItemRepo, itemLockOver } from "./testing.js";
+import { inertWorkItemRepo, itemLockOver } from "./domain/testing.js";
 
 const PROJECT = parseProjectId("00000000-0000-4000-8000-0000000000a1", "test");
 

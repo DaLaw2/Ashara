@@ -15,7 +15,7 @@ import { chargeUnreadMain, readMainForMerge, returnToPending } from "./requeue-o
 import { MERGE_RECORD_BACKOFF_MS } from "./execution/merge-record.js";
 import { clientWaitCause } from "./project-halt.js";
 import type { ProjectBlockCause } from "./project-halt.js";
-import type { ClientQuestions } from "./types.js";
+import type { ClientQuestions } from "./execution/dispatch-run-deps.js";
 
 type HeldReason = Extract<StoredBlockedReason, { source: "awaiting_client" }>;
 

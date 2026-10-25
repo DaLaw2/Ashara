@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterAll, describe, expect, test, vi, afterEach } from "vitest";
 import type { WorkItemId } from "@ashara/shared";
 import { createWorkItemId, parseProjectId } from "@ashara/shared";
-import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
+import { notExercised, recordingLogger } from "@ashara/shared/testing";
 import type { StoredBlockedReason } from "../work-item-language/blocked-reason.js";
 import { InvalidStatusTransition } from "../work-item-language/transitions.js";
 import { parseWorkItemJsonb } from "../work-item-language/work-item-row.js";
@@ -15,14 +15,13 @@ import type { WorkItem, WorkItemRepository } from "../domain/index.js";
 import { ContextBudgetExceeded } from "../acl/finance-acl.js";
 import { toRecordedOutcome } from "../acl/workplace-acl.js";
 import type { Outcome } from "../acl/workplace-acl.js";
-import { DEFAULT_CONFIG, withOverrides } from "../types.js";
-import type { CoreLoopDeps, CoreLoopOverrides, DispatchSteps, LoopCore } from "../types.js";
-import { inertCoreLoopDeps, inertWorkItemRepo, itemLockOver } from "../testing.js";
+import { inertWorkItemRepo, itemLockOver } from "../domain/testing.js";
 import { handleProcessingError, processTask } from "./dispatch-run.js";
 import { GiveUpMisrouted } from "./give-up-causes.js";
 import type { GiveUpCause } from "./give-up-causes.js";
 import { routeAsGivenUp } from "./reopen-routes.js";
 import { routingDepsOf } from "./routing-deps.js";
+import type { DispatchLoop, DispatchRunDeps, TaskDispatchSteps } from "./dispatch-run-deps.js";
 
 const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 // Stable ID shared by every item copy the mock repo returns, so the domain
@@ -105,41 +104,50 @@ function freshAbandonedItem(opts?: { omitBlockedReason?: boolean }): WorkItem {
   return item;
 }
 
+/** The members of each group of processTask's deps a test supplies in place of the inert ones. */
+type DispatchRunOverrides = { readonly [Group in keyof DispatchRunDeps]?: Partial<DispatchRunDeps[Group]> };
+
+function withDispatchOverrides(base: DispatchRunDeps, overrides: DispatchRunOverrides): DispatchRunDeps {
+  return { loop: { ...base.loop, ...overrides.loop }, dispatch: { ...base.dispatch, ...overrides.dispatch } };
+}
+
 /**
- * processTask's deps: an idle loop's (inertCoreLoopDeps), every target under the temporary directory
- * and its main holding no merge; `overrides` supply the work items, the dispatch and each other
- * member a test exercises. The loop's steps are never run by processTask.
+ * processTask's deps: every target under the temporary directory and its main holding no merge, and
+ * every other member throwing NotExercised; `overrides` supply the work items, the dispatch and each
+ * other member a test exercises.
  */
-function coreLoopDeps(
-  overrides: CoreLoopOverrides & { readonly loop: Pick<LoopCore, "workItemRepo">; readonly dispatch: Pick<DispatchSteps, "dispatchService"> },
-): CoreLoopDeps {
-  const processing = inertCoreLoopDeps({
+function dispatchRunDeps(
+  overrides: DispatchRunOverrides & { readonly loop: Pick<DispatchLoop, "workItemRepo">; readonly dispatch: Pick<TaskDispatchSteps, "dispatchService"> },
+): DispatchRunDeps {
+  const processing: DispatchRunDeps = {
     loop: {
-      config: { ...DEFAULT_CONFIG, workdirBase: tmpdir() },
-      containment: memoryStepContainment(() => true),
+      config: { workdirBase: tmpdir() },
+      logger: recordingLogger(),
+      workItemRepo: inertWorkItemRepo(),
       eventStore: { publish: async () => {} },
       projectRepo: {
         get: async () => ({ workspacePath: UNMERGED_TARGET }),
         recordWorkspacePath: notExercised("recordWorkspacePath"),
-        listActiveIds: notExercised("listActiveIds"),
         block: notExercised("block"),
-        listInfrastructureHalted: notExercised("listInfrastructureHalted"),
-        listClientWaitHalted: notExercised("listClientWaitHalted"),
-        resumeFromClientWait: notExercised("resumeFromClientWait"),
-        resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-        blockAllActive: notExercised("blockAllActive"),
-        listWithWorkspace: async () => [],
       },
-      spendCap: { deploymentStop: notExercised("deploymentStop"), refusalOf: () => null },
-      taskLanes: notExercised("taskLanes"),
+      spendCap: { refusalOf: () => null },
     },
-    dispatch: { failedApproachRepo: { record: async () => {} } },
-  });
-  return withOverrides(processing, overrides);
+    dispatch: {
+      dispatchService: { execute: notExercised("dispatchService.execute") },
+      failedApproachRepo: { record: async () => {} },
+      failureRouter: { route: notExercised("failureRouter.route") },
+      checkDisputes: { record: notExercised("checkDisputes.record") },
+      suiteReviewFindings: { record: notExercised("suiteReviewFindings.record") },
+      checkSetFreeze: { freezeFor: async () => [] },
+      environmentOwner: notExercised("environmentOwner"),
+      clientQuestions: { ask: notExercised("clientQuestions.ask"), answered: notExercised("clientQuestions.answered") },
+    },
+  };
+  return withDispatchOverrides(processing, overrides);
 }
 
 /**
- * Builds a CoreLoopDeps mock where the workItemRepo returns a Pending item on
+ * Builds a DispatchRunDeps mock where the workItemRepo returns a Pending item on
  * the first findById call and an Abandoned item on all subsequent calls —
  * simulating an external actor (HTTP PATCH) moving the item while the agent
  * was executing.
@@ -152,7 +160,7 @@ interface PreemptionDepsOptions {
 }
 
 function buildPreemptionDeps(options?: PreemptionDepsOptions): {
-  deps: CoreLoopDeps;
+  deps: DispatchRunDeps;
   logger: ReturnType<typeof recordingLogger>;
   savedBlockedReasons: StoredBlockedReason[];
   mergeRecords: Array<{ id: WorkItemId; commit: string }>;
@@ -183,7 +191,7 @@ function buildPreemptionDeps(options?: PreemptionDepsOptions): {
     findChildren: async () => [],
   });
 
-  const deps = coreLoopDeps({ loop: { workItemRepo, logger }, dispatch: { dispatchService: {
+  const deps = dispatchRunDeps({ loop: { workItemRepo, logger }, dispatch: { dispatchService: {
       execute: async () =>
         agentOutcome === "completed"
           ? {
@@ -215,7 +223,7 @@ describe("processTask attempt scope", () => {
   test("the dispatched attempt runs in a new trace, its parent the cycle's, every record of it carrying its task and attempt", async () => {
     const { deps: base } = buildPreemptionDeps();
     const logger = recordingLogger();
-    const deps: CoreLoopDeps = withOverrides(base, { loop: { logger }, dispatch: { dispatchService: {
+    const deps: DispatchRunDeps = withDispatchOverrides(base, { loop: { logger }, dispatch: { dispatchService: {
         execute: async (...args) => {
           logger.warn("test.in-dispatch", "a record of the attempt");
           return base.dispatch.dispatchService.execute(...args);
@@ -335,7 +343,7 @@ describe("processTask post-agent status ladder", () => {
 });
 
 describe("an environment-blocked dispatch: an infrastructure fault requeues uncharged, other environment outcomes park", () => {
-  type ExecutionResult = Awaited<ReturnType<DispatchSteps["dispatchService"]["execute"]>>;
+  type ExecutionResult = Awaited<ReturnType<TaskDispatchSteps["dispatchService"]["execute"]>>;
 
   const probeBlocked: ExecutionResult = {
     status: "environment_blocked",
@@ -352,7 +360,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
     execResult: ExecutionResult = probeBlocked,
     faultsBefore = 0,
   ): {
-    deps: CoreLoopDeps;
+    deps: DispatchRunDeps;
     stored: () => WorkItem;
     statusesWritten: string[];
     failureRoutes: () => number;
@@ -400,8 +408,8 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       findChildren: async () => [],
     });
 
-    const base = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => execResult } } });
-    const deps = coreLoopDeps({ loop: { workItemRepo, logger, projectRepo: {
+    const base = dispatchRunDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => execResult } } });
+    const deps = dispatchRunDeps({ loop: { workItemRepo, logger, projectRepo: {
         ...base.loop.projectRepo,
         block: async (_projectId, cause) => {
           halts.push(cause);
@@ -465,7 +473,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       expect(failedApproaches()).toBe(0);
 
       const dispatched: Array<number | null> = [];
-      const again: CoreLoopDeps = withOverrides(deps, { dispatch: { dispatchService: {
+      const again: DispatchRunDeps = withDispatchOverrides(deps, { dispatch: { dispatchService: {
           execute: async (task) => {
             dispatched.push(task.overflowedWindowTokens);
             return contextExceeded(null);
@@ -570,7 +578,7 @@ describe("an environment-blocked dispatch: an infrastructure fault requeues unch
       getDependencies: async () => [],
       findChildren: async () => [],
     });
-    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => probeBlocked } } });
+    const deps = dispatchRunDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => probeBlocked } } });
     const task = freshPendingItem();
 
     // The cycle's own path: a rejected processTask is recovered by handleProcessingError (core-loop.ts).
@@ -1076,7 +1084,7 @@ describe("stored checks stale: the check task is reopened and the item waits on 
       findChildren: async () => [],
     });
 
-    const deps = coreLoopDeps({ loop: { workItemRepo, eventStore: { publish: async (event) => void events.push(event.eventType) } }, dispatch: { dispatchService: {
+    const deps = dispatchRunDeps({ loop: { workItemRepo, eventStore: { publish: async (event) => void events.push(event.eventType) } }, dispatch: { dispatchService: {
         execute: async () => ({
           status: "checks_stale",
           checkTaskId: CHECK_ID,
@@ -1214,7 +1222,7 @@ describe("a disputed check: the check task is reopened with the dispute and the 
       getDependencies: async (id) => (id === ITEM_ID && whose === "own" ? [CHECK_ID] : []),
       findChildren: async () => [],
     });
-    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
+    const deps = dispatchRunDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
         execute: async () => ({
           status: "disputed",
           checksOf: whose === "own" ? ITEM_ID : mergedTaskId,
@@ -1307,7 +1315,7 @@ describe("an environment change requested: an environment task is opened and the
 
   function buildEnvironmentChangeDeps(
     priorChanges: number,
-    owner: Awaited<ReturnType<DispatchSteps["environmentOwner"]>>,
+    owner: Awaited<ReturnType<TaskDispatchSteps["environmentOwner"]>>,
     requester: Pick<WorkItem, "taskSpec"> = GRADED,
     completed: readonly WorkItem[] = [],
   ) {
@@ -1368,7 +1376,7 @@ describe("an environment change requested: an environment task is opened and the
       findChildren: async () => [],
       withTransaction: async (fn) => fn(workItemRepo),
     });
-    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
+    const deps = dispatchRunDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
         execute: async () => ({
           status: "environment_change_requested",
           paths: ["environment/Containerfile"],
@@ -1460,7 +1468,7 @@ describe("an environment change requested: an environment task is opened and the
     const { item, opened, routed, approaches } = built;
     let faults = 0;
     built.deps.loop.workItemRepo.withItemLocked = itemLockOver(built.deps.loop.workItemRepo.findById, { recordInfrastructureFault: async () => ++faults, blockProject: notExercised("blockProject") });
-    const deps: CoreLoopDeps = withOverrides(built.deps, { dispatch: { environmentOwner: async () => {
+    const deps: DispatchRunDeps = withDispatchOverrides(built.deps, { dispatch: { environmentOwner: async () => {
         throw new Error("roster query failed");
       } } });
 
@@ -1543,22 +1551,14 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
       findChildren: async () => [],
     });
 
-    const deps = coreLoopDeps({ loop: { workItemRepo, projectRepo: {
+    const deps = dispatchRunDeps({ loop: { workItemRepo, projectRepo: {
         get: async () => ({ workspacePath: UNMERGED_TARGET }),
         recordWorkspacePath: notExercised("recordWorkspacePath"),
-        listActiveIds: notExercised("listActiveIds"),
         block: async (projectId, cause) => {
           blocks.push({ projectId, ...cause });
           return "blocked";
         },
-        listInfrastructureHalted: notExercised("listInfrastructureHalted"),
-        listClientWaitHalted: notExercised("listClientWaitHalted"),
-        resumeFromClientWait: notExercised("resumeFromClientWait"),
-        resumeFromInfrastructureHalt: notExercised("resumeFromInfrastructureHalt"),
-        blockAllActive: notExercised("blockAllActive"),
-        listWithWorkspace: async () => [],
       }, spendCap: {
-        deploymentStop: notExercised("deploymentStop"),
         refusalOf: (error) =>
           error instanceof StubCapRefusal
             ? error.scope === "project"
@@ -1630,10 +1630,10 @@ describe("a dispatch refused before its call was sent is no failed approach", ()
 // What the client is told was merged comes from the work item's
 // merge record, written before the task is completed.
 describe("a completed dispatch records its merge before the task is Completed", () => {
-  type ExecutionResult = Awaited<ReturnType<DispatchSteps["dispatchService"]["execute"]>>;
+  type ExecutionResult = Awaited<ReturnType<TaskDispatchSteps["dispatchService"]["execute"]>>;
 
   function buildMergeDeps(execResult: ExecutionResult, mergeWrite: (commit: string) => Promise<void>): {
-    deps: CoreLoopDeps;
+    deps: DispatchRunDeps;
     stored: () => WorkItem;
     writes: string[];
   } {
@@ -1659,7 +1659,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
       getDependencies: async () => [],
       findChildren: async () => [],
     });
-    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => execResult } } });
+    const deps = dispatchRunDeps({ loop: { workItemRepo }, dispatch: { dispatchService: { execute: async () => execResult } } });
     return { deps, stored: () => row, writes };
   }
 
@@ -1678,7 +1678,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
     const built = buildMergeDeps(merged, async () => {});
     const { stored, writes } = built;
     let approaches = 0;
-    const deps: CoreLoopDeps = withOverrides(built.deps, { dispatch: { failedApproachRepo: { record: async () => { approaches++; } } }, loop: { eventStore: {
+    const deps: DispatchRunDeps = withDispatchOverrides(built.deps, { dispatch: { failedApproachRepo: { record: async () => { approaches++; } } }, loop: { eventStore: {
         publish: async () => {
           throw new Error("domain_events insert failed");
         },
@@ -1747,7 +1747,7 @@ describe("a completed dispatch records its merge before the task is Completed", 
     const built = buildMergeDeps(merged, async () => {});
     let failed = 0;
     const repo = built.deps.loop.workItemRepo;
-    const deps: CoreLoopDeps = withOverrides(built.deps, { loop: { workItemRepo: {
+    const deps: DispatchRunDeps = withDispatchOverrides(built.deps, { loop: { workItemRepo: {
         ...repo,
         save: async (item, previous) => {
           if (item.status === "Completed" && failed < failures) {
@@ -1881,7 +1881,7 @@ describe("a review of the plan's suites with problems: the named check tasks are
       findChildren: async () => [],
       withTransaction: async (fn) => fn(workItemRepo),
     });
-    const deps = coreLoopDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
+    const deps = dispatchRunDeps({ loop: { workItemRepo }, dispatch: { dispatchService: {
         execute: async () => ({
           status: "suite_review_problems",
           problems,
@@ -2013,7 +2013,7 @@ describe("a blocked finish on another task's work: the item waits on the task bu
       statement: null,
     };
     const logger = recordingLogger();
-    const deps = coreLoopDeps({
+    const deps = dispatchRunDeps({
       loop: { workItemRepo, logger, eventStore: { publish: async (event) => void events.push(event.eventType) } },
       dispatch: {
         dispatchService: {

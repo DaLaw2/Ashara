@@ -107,7 +107,7 @@ export const MIRRORED_ALLOWED: readonly AllowedPair[] = [
   },
   {
     names: ["NewSuiteReviewFindings", "SuiteReviewFindingsEntry"],
-    files: ["packages/delivery/src/types.ts", "packages/quality/src/repositories/suite-review.ts"],
+    files: ["packages/delivery/src/execution/dispatch-run-deps.ts", "packages/quality/src/repositories/suite-review.ts"],
     reason: "Delivery's port states what its suite-review step records; Quality's repository is what fills it, and neither context may import the other's module outside its ACL",
   },
   {

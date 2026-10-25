@@ -12,7 +12,8 @@ import type { RosterDerivationStep } from "./acl/organization-acl.js";
 import type { FirstPlanning } from "./first-plan.js";
 import type { WorkItem } from "./domain/index.js";
 import { DEFAULT_CONFIG, withOverrides } from "./types.js";
-import type { CoreLoopDeps, LoopStop, TaskResult } from "./types.js";
+import type { CoreLoopDeps, LoopStop } from "./types.js";
+import type { TaskResult } from "./execution/dispatch-run-deps.js";
 import { CORE_LOOP_STEPS, CoreLoop, HALTED_CYCLE_CLASSIFICATION } from "./core-loop.js";
 import { inertCoreLoopDeps, inertWorkItemRepo } from "./testing.js";
 
@@ -44,7 +45,10 @@ vi.mock("./domain/index.js", async (importOriginal) => {
   return {
     ...original,
     PlanningService: {
-      gate: async () => ({ available: twoTasks(), unlockWeights: new Map<string, number>() }),
+      gate: async () => {
+        gateObserver.observe();
+        return { available: twoTasks(), unlockWeights: new Map<string, number>() };
+      },
       next: original.PlanningService.next,
     },
   };
@@ -53,6 +57,9 @@ vi.mock("./domain/index.js", async (importOriginal) => {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Told each time the mocked gate runs; a step-order test records it, every other test ignores it. */
+const gateObserver: { observe: () => void } = { observe: () => {} };
 
 const TEST_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000001", "test");
 const TASK_IDS: [WorkItemId, WorkItemId] = [createWorkItemId(), createWorkItemId()];
@@ -128,6 +135,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   mockProcessTask.mockReset();
+  gateObserver.observe = () => {};
 });
 
 describe("CoreLoop batch dispatch parallelism", () => {
@@ -313,6 +321,192 @@ describe("CoreLoop tender intake", () => {
     });
     await expect(new CoreLoop(deps).runCycle()).rejects.toThrow(/client_messages unreachable/);
     expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A loop whose every step records itself in `order` when it runs, as `<step>#<n>` for its n-th run in
+ * the order's life; a terminal-report run is named by the kinds it is asked for. Parked exits are
+ * recorded by their read of the active projects (`active-projects#1`, the cycle's first such read),
+ * the spend cap's check as `spend-cap`, the release of held cells as `held-cells` and the cap's halt
+ * of every active project as `cap-halt`. `capAt` is the read of the spend cap, by number, that finds the
+ * deployment at its cap; none does when it is omitted.
+ */
+function stepRecordingDeps(order: string[], capAt?: number): CoreLoopDeps {
+  const runs = new Map<string, number>();
+  const record = (name: string): void => {
+    const run = (runs.get(name) ?? 0) + 1;
+    runs.set(name, run);
+    order.push(`${name}#${run}`);
+  };
+  const step = (name: string) =>
+    vi.fn(async () => {
+      record(name);
+      return [];
+    });
+  gateObserver.observe = () => record("gate");
+  mockProcessTask.mockImplementation(async (_deps: CoreLoopDeps, task: WorkItem) => {
+    record("dispatch");
+    return { taskId: task.id, status: "completed" as const, detail: "ok" };
+  });
+  let checks = 0;
+  const spendCap: SpendCapPort = {
+    deploymentStop: async () => {
+      record("spend-cap");
+      checks++;
+      return checks === capAt ? { reason: "deployment cap reached", spend: { capUsd: 5, spentUsd: 5, inFlightUsd: 0, nextCallUsd: 0.5 } } : null;
+    },
+    refusalOf: () => null,
+  };
+  const base = buildDeps(
+    { runPending: step("liaison-intake") },
+    { runPending: step("first-plan") },
+    { runPending: step("plan-report") },
+    { runPending: step("client-stop") },
+    { runPending: step("roster") },
+    { runPending: step("stack-choice") },
+    spendCap,
+  );
+  return withOverrides(base, {
+    loop: {
+      projectRepo: {
+        ...base.loop.projectRepo,
+        listInfrastructureHalted: async () => (record("infrastructure-resume"), []),
+        listClientWaitHalted: async () => (record("client-wait-resume"), []),
+        listWithWorkspace: async () => (record("settled-branches"), []),
+        listActiveIds: async () => (record("active-projects"), []),
+        blockAllActive: async () => (record("cap-halt"), []),
+      },
+    },
+    client: {
+      clientReceipts: { runPending: step("client-receipt"), dueMessages: async () => new Set<string>() },
+      liaisonAnswers: { runPending: step("liaison-answers") },
+      clientChanges: { runPending: step("client-change") },
+    },
+    planning: { replanning: { runPending: step("replan") } },
+    dispatch: { heldCells: { release: async () => record("held-cells") } },
+    sweeps: {
+      terminalSweeps: { ...base.sweeps.terminalSweeps, dueTerminalSweeps: async () => (record("terminal-sweep"), []) },
+      acceptance: { ...base.sweeps.acceptance, readyForAcceptance: async () => (record("acceptance"), []) },
+    },
+    reporting: {
+      terminalReports: { runPending: async (kinds: readonly TerminalKind[]) => (record(`terminal-report[${kinds.join(",")}]`), []) },
+      blockReports: { runPending: step("block-report") },
+      burnWarnings: { runPending: step("burn-warning") },
+    },
+  });
+}
+
+/** Each pair names a step run that must come before another, with the reason core-loop.ts or the step groups in types.ts state for it. */
+type StepOrder = readonly [before: string, after: string, why: string];
+
+function expectStepOrder(order: readonly string[], pairs: readonly StepOrder[]): void {
+  for (const [before, after, why] of pairs) {
+    expect(order, `${before} ran (${why})`).toContain(before);
+    expect(order, `${after} ran (${why})`).toContain(after);
+    expect(order.indexOf(before), `${before} before ${after}: ${why}`).toBeLessThan(order.indexOf(after));
+  }
+}
+
+// The receipts read the cap first (spend-cap#1) to word themselves; the cycle's check before its
+// steps of LLM calls is its second read.
+const CAP_CHECK = "spend-cap#2";
+const CARRIED = "terminal-report[stopped,halted]#1";
+const PLANNED = "terminal-report[planning-stopped,declined]#1";
+const ACCEPTED = "terminal-report[delivered]#1";
+const EVERY_KIND = `terminal-report[${TERMINAL_KINDS.join(",")}]#1`;
+
+describe("CoreLoop step order", () => {
+  test("a full cycle runs every step after each step its documented order puts first", async () => {
+    const order: string[] = [];
+    await new CoreLoop(stepRecordingDeps(order)).runCycle();
+
+    expectStepOrder(order, [
+      ["client-stop#1", "client-receipt#1", "each message's receipt states its project's state as the stops just left it"],
+      ["client-stop#1", CAP_CHECK, "the client's stops run first, before the spend-cap check"],
+      ["client-stop#1", "liaison-intake#1", "a project stopped is never intaken"],
+      ["client-stop#1", "first-plan#1", "a project stopped is never planned"],
+      ["client-stop#1", "gate#1", "a project stopped is never gated"],
+      ["client-stop#1", "stack-choice#1", "the client's stops run first: no step below takes in a stopped project"],
+      ["client-stop#1", "infrastructure-resume#1", "the client's stops run first: no step below takes in a stopped project"],
+      ["client-stop#1", "client-wait-resume#1", "the client's stops run first: no step below takes in a stopped project"],
+      ["client-stop#1", "terminal-sweep#1", "a stop taken this cycle is told after its terminal sweep"],
+      ["client-stop#1", CARRIED, "a stop taken this cycle is told with the carried stop and halt messages"],
+      ["client-stop#1", "block-report#1", "a project stopped is never reported on as returning to work"],
+      ["client-stop#1", "burn-warning#1", "a project stopped is never warned of its burn"],
+      ["stack-choice#1", CAP_CHECK, "a stack choice makes no LLM call, so it runs before the spend-cap check"],
+      ["stack-choice#1", CARRIED, "a merged stack choice brings the project's state up to date before any report on it"],
+      ["stack-choice#1", "block-report#1", "a merged stack choice brings the project's state up to date before any report on it"],
+      ["stack-choice#1", "burn-warning#1", "a merged stack choice brings the project's state up to date before any report on it"],
+      ["infrastructure-resume#1", "burn-warning#1", "a resumed halt brings the project's state up to date before any report on it"],
+      ["client-wait-resume#1", "burn-warning#1", "a resumed halt brings the project's state up to date before any report on it"],
+      ["infrastructure-resume#1", CARRIED, "only a halt already told resumes; one written late is reported first"],
+      ["infrastructure-resume#1", "block-report#1", "an infrastructure resumption is told in the cycle it happens"],
+      ["client-wait-resume#1", CARRIED, "a client_wait halt resumes only once told, like an infrastructure halt"],
+      ["client-wait-resume#1", "block-report#1", "a client_wait resumption is told in the cycle it happens"],
+      ["terminal-sweep#1", CARRIED, "each stop and halt is swept on main before its terminal message"],
+      [CARRIED, CAP_CHECK, "the stop and halt messages make no LLM call, so they run before the spend-cap check"],
+      [CARRIED, "block-report#1", "a return to work is reported once its halt is told"],
+      ["block-report#1", "burn-warning#1", "the burn warnings run after the block reports"],
+      ["burn-warning#1", CAP_CHECK, "the burn warnings run before the spend-cap check"],
+      [CAP_CHECK, "held-cells#1", "a cycle at the cap releases what attempts held inside its halt"],
+      [CAP_CHECK, "liaison-intake#1", "every step after the spend-cap check makes LLM calls"],
+      ["held-cells#1", "settled-branches#1", "the cells a failed teardown left are released, then every settled task's branches"],
+      ["settled-branches#1", "dispatch#1", "what attempts held is released before a full cycle's dispatch"],
+      ["liaison-intake#1", "liaison-answers#1", "tenders first: a project's intake comes before any work on it"],
+      ["liaison-answers#1", "client-change#1", "the client's changes of direction are read after the answers"],
+      ["liaison-intake#1", "roster#1", "the roster runs after intake"],
+      ["roster#1", "liaison-answers#2", "answers posted while the roster was derived are read before the first plan"],
+      ["liaison-answers#2", "first-plan#1", "the first plan is made from the vision the answers state"],
+      ["roster#1", "first-plan#1", "first planning requires a roster"],
+      ["first-plan#1", "liaison-answers#3", "answers posted while the first plan was written are read before its tasks are dispatched"],
+      ["liaison-answers#3", "replan#1", "a correction an answer made is replaced by the revision in this cycle"],
+      ["first-plan#1", "replan#1", "the revisions run after the first plans"],
+      ["replan#1", "plan-report#1", "the revisions run before the planning reports"],
+      ["first-plan#1", "plan-report#1", "each recorded planning outcome is reported after planning"],
+      ["plan-report#1", "gate#1", "a plan is reported before gating, so it can be dispatched this cycle"],
+      ["liaison-intake#1", "gate#1", "intake runs before work-item gating"],
+      ["client-change#1", PLANNED, "a declined contract version is told after the steps that write it"],
+      ["first-plan#1", PLANNED, "a first planning that stopped is told after the step that writes it"],
+      ["plan-report#1", PLANNED, "a planning that stopped is told with the other planning reports"],
+      ["active-projects#1", "gate#1", "every Blocked task takes its parked exit before the gate reads them"],
+      ["active-projects#1", "acceptance#1", "the exits of Blocked tasks run before the acceptance sweeps on main"],
+      ["acceptance#1", ACCEPTED, "a delivered report is due only after its acceptance sweep"],
+      ["gate#1", "dispatch#1", "the gate selects the tasks the lanes dispatch"],
+      ["dispatch#1", "client-receipt#2", "the cycle is closed by the receipts of the messages that arrived while it ran"],
+    ]);
+  });
+
+  test("a cycle that reaches the deployment's cap halts every active project and tells it after sweeping, then posts the receipts", async () => {
+    const order: string[] = [];
+    const result = await new CoreLoop(stepRecordingDeps(order, 2)).runCycle();
+
+    expect(result.stop).not.toBeNull();
+    expectStepOrder(order, [
+      [CAP_CHECK, "cap-halt#1", "the deployment's cap halts every active project"],
+      ["held-cells#1", "settled-branches#1", "the cells a failed teardown left are released, then every settled task's branches"],
+      ["cap-halt#1", "terminal-sweep#2", "a halt recorded at the cap is owed its terminal sweep"],
+      ["terminal-sweep#2", EVERY_KIND, "each stop and halt is swept on main before its terminal message"],
+      ["cap-halt#1", EVERY_KIND, "each project halted at the cap has its report posted before the loop stops"],
+      [EVERY_KIND, "block-report#2", "a return to work is reported once its halt is told"],
+      [EVERY_KIND, "client-receipt#2", "the receipts posted at the cap tell the client all work has stopped"],
+    ]);
+    expect(order).not.toContain("liaison-intake#1");
+    expect(mockProcessTask).not.toHaveBeenCalled();
+  });
+
+  test("a halted cycle takes the stops, posts the receipts, releases what attempts held, then sweeps before the reports", async () => {
+    const order: string[] = [];
+    await new CoreLoop(stepRecordingDeps(order)).runHaltedCycle();
+
+    expectStepOrder(order, [
+      ["client-stop#1", "client-receipt#1", "each message's receipt states its project's state as the stops just left it"],
+      ["held-cells#1", "settled-branches#1", "the cells a failed teardown left are released, then every settled task's branches"],
+      ["client-stop#1", "terminal-sweep#1", "a stop taken in a halted cycle is owed its terminal sweep"],
+      ["terminal-sweep#1", EVERY_KIND, "each stop and halt is swept on main before its terminal message"],
+      [EVERY_KIND, "block-report#1", "a return to work is reported once its halt is told"],
+      [EVERY_KIND, "plan-report#1", "a plan written in the cycle that reached the cap is reported after its halt's message"],
+    ]);
   });
 });
 

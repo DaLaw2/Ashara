@@ -191,6 +191,14 @@ const MODULES: Readonly<Record<string, Readonly<Record<string, ModuleSpec>>>> = 
     ports: { allow: [], host: "src/ports.ts", target: "src/ports.ts" },
     [ENTRY]: { allow: [], host: "src/model-schemas.ts", target: "src/index.ts" },
   },
+  delivery: {
+    acl: { allow: [], host: "src/acl/knowledge-acl.ts", target: "src/acl/quality-acl.ts" },
+    board: { allow: ["acl"], host: "src/domain/select.ts", target: "src/domain/index.ts" },
+    planning: { allow: ["board", "acl"], host: "src/bulk-plan.ts", target: "src/replan-port.ts" },
+    dispatch: { allow: ["board", "acl"], host: "src/failure-router.ts", target: "src/execution/dispatch-run.ts" },
+    loop: { allow: ["planning", "dispatch", "board", "acl"], host: "src/runner.ts", target: "src/core-loop.ts" },
+    [ENTRY]: { allow: [], host: "src/index.ts", target: "src/index.ts" },
+  },
 };
 
 interface ModuleProbeLine {
@@ -241,8 +249,13 @@ const MODULE_EXTRAS: Readonly<Record<string, Readonly<Record<string, readonly Mo
   },
 };
 
-/** The other probes' own files are in no module, so the probed run's rules give them one. */
+/**
+ * The other probes' own files are in no module, so the probed run's rules give them one, which may
+ * import every module of its package but the entry: a module rule reports none of those probes.
+ */
 const PROBE_MODULE = 'module.probe = ["src/__boundary_probe__/**"]';
+const probeModuleAllow = (modules: Readonly<Record<string, ModuleSpec>>): string =>
+  `module-allow.probe = [${Object.keys(modules).filter((name) => name !== ENTRY).map((name) => `"${name}"`).join(", ")}]`;
 const UNASSIGNED_FILE = "src/__module_probe__.ts";
 const EMPTY_MODULE = { name: "probe-empty", glob: "src/__no_such_module_file__.ts" };
 const CYCLE_RULE = { pkg: "engagement", line: 'module-allow.vision = ["reports"]', reason: "a cycle between modules: vision -> reports -> vision" };
@@ -844,7 +857,7 @@ describe("boundary-rules.toml against the context map", () => {
     clean = runChecker(scratch);
     const rulesFile = path.join(scratch, "boundary-rules.toml");
     const rules = fs.readFileSync(rulesFile, "utf-8");
-    const probeModules = Object.fromEntries(Object.keys(MODULES).map((pkg) => [pkg, [PROBE_MODULE, `module.${EMPTY_MODULE.name} = ["${EMPTY_MODULE.glob}"]`]]));
+    const probeModules = Object.fromEntries(Object.entries(MODULES).map(([pkg, modules]) => [pkg, [PROBE_MODULE, probeModuleAllow(modules), `module.${EMPTY_MODULE.name} = ["${EMPTY_MODULE.glob}"]`]]));
     fs.writeFileSync(rulesFile, withSectionLines(rules, { ...probeModules, db: [UNEXPORTED_SUBPATH_RULE] }));
     for (const probe of probes) plant(scratch, probe);
     probed = runChecker(scratch);

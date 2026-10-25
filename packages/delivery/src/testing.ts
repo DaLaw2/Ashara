@@ -5,10 +5,13 @@
  */
 
 import { memoryStepContainment, notExercised, recordingLogger } from "@ashara/shared/testing";
-import type { LockedChargeLedger, WorkItemRepository } from "./domain/index.js";
+import { inertWorkItemRepo } from "./domain/testing.js";
 import { concurrentTaskLanes } from "./core-loop.js";
 import { DEFAULT_CONFIG, withOverrides } from "./types.js";
 import type { CoreLoopDeps, CoreLoopOverrides, LoopCore } from "./types.js";
+
+/** @testseam the board's inert repository and item lock, re-exported for the tests of other packages; production builds neither */
+export { inertWorkItemRepo, itemLockOver } from "./domain/testing.js";
 
 const idle = async (): Promise<never[]> => [];
 
@@ -71,45 +74,6 @@ export function wholeDatabaseStepsIdle(): WholeDatabaseSteps {
       burnWarnings: { runPending: idle },
     },
   };
-}
-
-/**
- * A work-item repository whose every member throws NotExercised, but those `overrides` supply.
- * @testseam the loop's and its steps' unit tests stand their work items in with it; production's is adaptWorkItemRepo
- */
-export function inertWorkItemRepo(overrides: Partial<WorkItemRepository> = {}): WorkItemRepository {
-  return {
-    create: notExercised("workItemRepo.create"),
-    findById: notExercised("workItemRepo.findById"),
-    listByProject: notExercised("workItemRepo.listByProject"),
-    findByProjectAndStatus: notExercised("workItemRepo.findByProjectAndStatus"),
-    projectIdsWithStatus: notExercised("workItemRepo.projectIdsWithStatus"),
-    listIdsByStatus: notExercised("workItemRepo.listIdsByStatus"),
-    save: notExercised("workItemRepo.save"),
-    incrementDispatchCount: notExercised("workItemRepo.incrementDispatchCount"),
-    saveRefundedOverflow: notExercised("workItemRepo.saveRefundedOverflow"),
-    recordCrashOrphan: notExercised("workItemRepo.recordCrashOrphan"),
-    saveOrphanExit: notExercised("workItemRepo.saveOrphanExit"),
-    saveRefunded: notExercised("workItemRepo.saveRefunded"),
-    recordMergeCommit: notExercised("workItemRepo.recordMergeCommit"),
-    addDependency: notExercised("workItemRepo.addDependency"),
-    getDependencies: notExercised("workItemRepo.getDependencies"),
-    findChildren: notExercised("workItemRepo.findChildren"),
-    listDependenciesByProject: notExercised("workItemRepo.listDependenciesByProject"),
-    listCorrectionHeld: notExercised("workItemRepo.listCorrectionHeld"),
-    withTransaction: notExercised("workItemRepo.withTransaction"),
-    withItemLocked: notExercised("workItemRepo.withItemLocked"),
-    ...overrides,
-  };
-}
-
-/**
- * withItemLocked over a unit test's own stand-ins: the item read by `findById`, the charge written
- * through `ledger`. No lock is held; the interleaving the lock serializes is tested over a database.
- * @testseam the unit tests of a charge stand its locked transaction in with it; production's is adaptWorkItemRepo's
- */
-export function itemLockOver(findById: WorkItemRepository["findById"], ledger: LockedChargeLedger): WorkItemRepository["withItemLocked"] {
-  return async (item, fn) => fn(await findById(item.id), ledger);
 }
 
 /**

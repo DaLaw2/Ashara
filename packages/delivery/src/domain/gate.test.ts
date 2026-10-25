@@ -7,7 +7,7 @@ import type { WorkItem } from "./work-item.js";
 import type { ActiveProjects, WorkItemRepository } from "./repository.js";
 import { GateKeeper } from "./gate.js";
 import type { EventPublisher } from "../lifecycle/ports.js";
-import { inertWorkItemRepo } from "../testing.js";
+import { inertWorkItemRepo } from "./testing.js";
 
 const PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000002", "test");
 const OTHER_PROJECT_ID = parseProjectId("00000000-0000-4000-8000-000000000003", "test");
