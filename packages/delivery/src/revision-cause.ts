@@ -2,10 +2,7 @@ import type { ProjectId } from "@ashara/shared";
 import type { PlanningVision } from "./acl/engagement-acl.js";
 import type { AbandonedTask, CorrectionRequest, ProjectAwaitingReplan, RevisionCause } from "./replan-port.js";
 import { blockedReasonToRecord } from "./work-item-language/blocked-reason.js";
-import type { StoredBlockedReason } from "./work-item-language/blocked-reason.js";
-
-/** The cause a given-up task records: any but a plan revision's supersession. */
-type GivenUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded" }>;
+import type { GivenUpReason } from "./work-item-language/blocked-reason.js";
 
 /** The store listed a project awaiting a revision that neither a client correction nor a repair asks for. */
 export class RevisionUnasked extends Error {

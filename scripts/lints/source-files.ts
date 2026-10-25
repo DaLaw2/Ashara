@@ -105,6 +105,11 @@ export function shownTarget(target: ImportTarget): string {
   return target.kind === "template" ? `\`${target.prefix}\${...}\`` : "<computed specifier>";
 }
 
+/** Whether an edge's loads may hand the module a binding: every edge but a program run, whose loads are in a process of its own. */
+export function bindsInModule(edge: ImportEdge): boolean {
+  return edge.form !== "program";
+}
+
 /**
  * Whether an edge may load `@ashara/<entry>` (any `@ashara/` module when `entry` is undefined): a
  * literal names one module, a template prefix every module it begins, and a computed target any.
@@ -168,13 +173,14 @@ interface UnaccountedImport {
  * The file's `@ashara/` imports and re-exports by statement, and every other edge that may load an
  * `@ashara/` module: a side-effect import, a call (a dynamic import, a require, a vitest loader), a
  * type-position import, an import-equals, and an edge whose target no literal spells whole. Those
- * are left unaccounted and reported, never assumed harmless.
+ * are left unaccounted and reported, never assumed harmless. A program run loads in a process of its
+ * own and hands the file no name, so it is neither.
  */
 export function extractNamedImports(filePath: string, content: string): { imports: NamedImport[]; unaccounted: UnaccountedImport[] } {
   const imports: NamedImport[] = [];
   const unaccounted: UnaccountedImport[] = [];
   for (const edge of importEdges(filePath, content)) {
-    if (!mayNameAshara(edge.target)) continue;
+    if (!bindsInModule(edge) || !mayNameAshara(edge.target)) continue;
     const pkg = edge.target.kind === "static" ? asharaPackageOf(edge.target.specifier) : null;
     const statement = (edge.form === "import" || edge.form === "export") && edge.clause.kind !== "none";
     if (edge.target.kind === "static" && pkg !== null && statement) {

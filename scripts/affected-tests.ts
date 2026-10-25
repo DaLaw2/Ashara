@@ -80,7 +80,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describeErrorChain } from "@ashara/shared";
 import { importReader } from "./import-targets.js";
-import { forgetPrograms } from "./module-program.js";
+import { forgetPrograms, isCheckoutSource } from "./module-program.js";
 import { lockfileImpact, manifestImpact, parseLockfile, type DependencyImpact, type Lockfile } from "./lockfile-impact.js";
 
 class AffectedTestsError extends Error {
@@ -144,8 +144,6 @@ export const SIMULATOR_DIR = "packages/integration/src/simulator/";
 
 const TEST_FILE_RE = /\.test\.ts$/;
 const SNAPSHOT_RE = /^(.*)\/__snapshots__\/([^/]+\.test\.ts)\.snap$/;
-/** The files vitest's graph reads: the modules tests import, in the trees vitest.config.mts includes. */
-const GRAPH_MODULE_RE = /^(packages\/[^/]+\/src|scripts)\/.+\.(ts|mjs|js)$/;
 
 interface SelectionBasis {
   /** Whether any changed path is one whose change must be judged by a test. */
@@ -240,7 +238,7 @@ export async function selectTests(changes: readonly ChangedPath[], sources: Sele
     for (const t of namingTests) tests.add(t);
     const named = namingTests.length > 0 ? `; named by ${namingTests.length} test file(s)` : "";
 
-    if (change.status === "deleted" && !TEST_FILE_RE.test(file) && GRAPH_MODULE_RE.test(file)) {
+    if (change.status === "deleted" && !TEST_FILE_RE.test(file) && isCheckoutSource(file)) {
       wholeSuite.push(`${file}: deleted, and the graph cannot see the importers of a module that no longer exists`);
       continue;
     }
@@ -256,7 +254,7 @@ export async function selectTests(changes: readonly ChangedPath[], sources: Sele
       reasons.push(`${file}: snapshot of ${owner}`);
       continue;
     }
-    if (GRAPH_MODULE_RE.test(file)) {
+    if (isCheckoutSource(file)) {
       graphModules.add(file);
       if (file.startsWith(SIMULATOR_DIR)) {
         const simulatorTests = sources.allTests.filter((t) => t.startsWith(SIMULATOR_DIR));
@@ -272,7 +270,7 @@ export async function selectTests(changes: readonly ChangedPath[], sources: Sele
       reasons.push(`${file}: selects nothing, ${clear.reason}`);
       continue;
     }
-    const namingModules = namers.filter((f) => GRAPH_MODULE_RE.test(f) && !allTests.has(f));
+    const namingModules = namers.filter((f) => isCheckoutSource(f) && !allTests.has(f));
     if (namingModules.length === 0 && namingTests.length === 0) {
       wholeSuite.push(`${file}: no rule classifies it and no module or test names it, so nothing bounds its effect`);
       continue;
@@ -366,7 +364,7 @@ async function dependencyTests(impacts: readonly DependencyImpact[], sources: Se
   const allTests = new Set(sources.allTests);
   const take = (file: string): void => {
     if (allTests.has(file)) required.add(file);
-    else if (GRAPH_MODULE_RE.test(file) && !TEST_FILE_RE.test(file)) modules.add(file);
+    else if (isCheckoutSource(file) && !TEST_FILE_RE.test(file)) modules.add(file);
   };
   const manifestDirs = manifestDirsOf(sources.files);
   const takeWorkspace = (workspace: string): void => {
@@ -383,7 +381,7 @@ async function dependencyTests(impacts: readonly DependencyImpact[], sources: Se
       takeWorkspace(workspace);
       reasons.add(`${file}: ${why}, so every module and test of ${workspaceLabel(workspace)} runs`);
     };
-    const readable = sources.files.filter((file) => allTests.has(file) || GRAPH_MODULE_RE.test(file));
+    const readable = sources.files.filter((file) => allTests.has(file) || isCheckoutSource(file));
     const texts = sources.readRevisions(readable, "head");
     const edgesOf = importReader(readableTexts(texts));
     for (const file of readable) {

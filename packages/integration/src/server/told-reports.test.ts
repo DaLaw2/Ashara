@@ -33,10 +33,9 @@ import { deliveredMessage, haltMessage } from "./terminal-reports.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const TOLD_MIGRATION = "015_told_reports.sql";
 
-type Db = Database;
 
 /** A database handle whose pool this suite ends, so a "restart" is a new pool over the same rows. */
-function connect(url: string): { readonly db: Db; readonly end: () => Promise<void> } {
+function connect(url: string): { readonly db: Database; readonly end: () => Promise<void> } {
   const pools: Array<ReturnType<PoolFactory>> = [];
   const factory: PoolFactory = (config) => {
     const pool = createPgPool(config);
@@ -50,24 +49,24 @@ const noReview = async (): Promise<null> => null;
 const IdRows = z.array(z.object({ id: z.string() }));
 const CountRows = z.array(z.object({ n: z.number() })).length(1);
 
-async function idOf(db: Db, statement: ReturnType<typeof sql>): Promise<string> {
+async function idOf(db: Database, statement: ReturnType<typeof sql>): Promise<string> {
   const [row] = IdRows.length(1).parse((await db.execute(statement)).rows);
   if (row === undefined) throw new Error("the statement returned no id");
   return row.id;
 }
 
-async function countOf(db: Db, statement: ReturnType<typeof sql>): Promise<number> {
+async function countOf(db: Database, statement: ReturnType<typeof sql>): Promise<number> {
   const [row] = CountRows.parse((await db.execute(statement)).rows);
   if (row === undefined) throw new Error("the count returned no row");
   return row.n;
 }
 
-async function outboundReports(db: Db, projectId: string): Promise<number> {
+async function outboundReports(db: Database, projectId: string): Promise<number> {
   return countOf(db, sql`SELECT count(*)::int AS n FROM client_messages WHERE project_id = ${projectId} AND direction = 'outbound'`);
 }
 
 /** The subjects each listing names: halts and resumptions, passed sweeps, plan revisions. */
-async function dueSubjects(db: Db): Promise<{ halts: string[]; resumptions: string[]; sweeps: string[]; revisions: string[] }> {
+async function dueSubjects(db: Database): Promise<{ halts: string[]; resumptions: string[]; sweeps: string[]; revisions: string[] }> {
   const terminals = await listDueTerminals(db, { sweepOutcome: readSweepOutcome, blockingReview: noReview }, TERMINAL_KINDS, systemClock);
   const halts = terminals.flatMap((due) => {
     if (due instanceof UnreadSubject) return due.id.startsWith("halted:") ? [due.id.slice("halted:".length)] : [];
@@ -84,7 +83,7 @@ async function dueSubjects(db: Db): Promise<{ halts: string[]; resumptions: stri
 const fault = { category: "fault", errorClass: "ToldReportsTestFault", reason: "halted by the told-reports test" } as const;
 
 /** The halt episode's terminal sweep, recorded as one that ran on no commit: a halt's report is due only once it is on record. */
-async function sweepHalt(db: Db, episodeId: string): Promise<void> {
+async function sweepHalt(db: Database, episodeId: string): Promise<void> {
   await db.execute(sql`
     INSERT INTO acceptance_sweeps (project_id, main_commit, environment_version, checked_tasks, unchecked_tasks, passed, details, purpose, block_id)
     SELECT project_id, NULL, NULL, '[]'::jsonb, '[]'::jsonb, false, 'told-reports terminal sweep', 'terminal', id FROM project_blocks WHERE id = ${episodeId}`);

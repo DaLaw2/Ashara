@@ -15,7 +15,7 @@ const LINTS_DIR = import.meta.dirname;
 const RUNNER = path.join(REPO, "scripts", "check-boundaries.ts");
 
 /** Lint modules hold one lint each; these are the shared readers and helpers the lints build on. */
-const HELPERS = new Set(["joined-types.ts", "lint.ts", "module-rules.ts", "production-source.ts", "rules.ts", "rules-parse-error.ts", "source-files.ts", "stand-ins.ts"]);
+const HELPERS = new Set(["joined-types.ts", "lint.ts", "mirrored-allowed.ts", "module-rules.ts", "production-source.ts", "rules.ts", "rules-parse-error.ts", "source-files.ts", "stand-ins.ts"]);
 
 const SIMULATOR = "packages/integration/src/simulator";
 const WORDING = `export const CONFLICT_HEADING = "## Merge with main in progress";\n`;
@@ -61,7 +61,7 @@ describe("the boundary gate's runner", () => {
     expect(modules.length).toBeGreaterThan(0);
     for (const file of modules) {
       const lint: unknown = await import(path.join(LINTS_DIR, file));
-      expect(lint, file).toHaveProperty("run", expect.any(Function));
+      expect(typeof lint === "object" && lint !== null && "run" in lint && typeof lint.run === "function", file).toBe(true);
       expect(runner, file).toContain(`from "./lints/${file.replace(/\.ts$/, ".js")}"`);
     }
   });

@@ -22,9 +22,8 @@ const NONCE = randomUUID().slice(0, 8);
 const NAME = `spend-cap-test-${NONCE}`;
 const LARGE = 1e6;
 
-type Db = Database;
 type ProjectId = Awaited<ReturnType<ProjectRepository["create"]>>["id"];
-let db: Db;
+let db: Database;
 let calls: LlmCallRepository;
 let projects: ProjectRepository;
 let clientId: string;

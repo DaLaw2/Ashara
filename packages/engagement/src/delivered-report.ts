@@ -27,20 +27,14 @@ type GoalClose =
   | { readonly kind: "no-record" };
 
 /**
- * How independent of the first reading of the tender its second reading was: another model family,
- * another model of the same family, or the same model asked again from another angle.
- */
-type ReviewStrength = SecondOpinionStrength;
-
-/**
  * How the tender's reading stood (intake_readings): its first reading asked the client
  * questions; or it asked none, and a second reading of the strength named asked none either or raised
  * the questions the client was sent; or no second reading answered. Or none is recorded.
  */
 export type ReadingTold =
   | { readonly kind: "not-needed" }
-  | { readonly kind: "confirmed"; readonly strength: ReviewStrength }
-  | { readonly kind: "questions-raised"; readonly strength: ReviewStrength; readonly questions: number }
+  | { readonly kind: "confirmed"; readonly strength: SecondOpinionStrength }
+  | { readonly kind: "questions-raised"; readonly strength: SecondOpinionStrength; readonly questions: number }
   | { readonly kind: "unconfirmed" }
   | { readonly kind: "unrecorded" };
 
@@ -253,7 +247,7 @@ function closeLine(title: string, close: GoalClose): string {
 }
 
 /** Who gave the second reading of the tender, in the client's words: a weaker strength says what it shares. */
-const READ_BY: Readonly<Record<ReviewStrength, string>> = {
+const READ_BY: Readonly<Record<SecondOpinionStrength, string>> = {
   "other-family": "another model family",
   "same-family-other-model": "another model of the same family as the first reading, which shares more of its blind spots than another family would",
   "same-model": "the same model as the first reading asked again to look for what is ambiguous or assumed, which shares every one of its blind spots",

@@ -17,9 +17,10 @@ import type { HaltKind } from "@ashara/delivery/predicates";
 export const INBOUND_KINDS = ["tender", "answer", "change", "stop"] as const;
 export type InboundKind = (typeof INBOUND_KINDS)[number];
 
-type Lifecycle = (typeof PROJECT_LIFECYCLES)[number];
+/** A lifecycle Engagement holds a project in. */
+export type ProjectLifecycle = (typeof PROJECT_LIFECYCLES)[number];
 /** A lifecycle in which the project is closed: nothing works on it again. */
-export type ClosedLifecycle = Exclude<Lifecycle, "active">;
+export type ClosedLifecycle = Exclude<ProjectLifecycle, "active">;
 export const CLOSED_LIFECYCLES = ["stopped", "accepted"] as const satisfies readonly ClosedLifecycle[];
 
 /**

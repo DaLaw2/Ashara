@@ -30,8 +30,8 @@
  *   test-only-subpaths = [...]      subpaths of this package that only a *.test.ts file may import,
  *                                   from any package or scripts/ by its `@ashara/` name, or from
  *                                   inside the package by a relative path to its entry file
- *   classes.<pkg>    = [...]        the only classes <pkg> exports (`export class`, and each name an
- *                                   `export { A as B }` gives one) that this package's files, tests
+ *   classes.<pkg>    = [...]        the only classes <pkg> exports (each name it exports, by any export
+ *                                   form, whose symbol the checker finds is a class) that this package's files, tests
  *                                   included, may import by value; an `import type` names none, and
  *                                   a namespace, default or dynamic import of <pkg>, or a relative path
  *                                   into it, is refused, since the classes it reaches cannot be read

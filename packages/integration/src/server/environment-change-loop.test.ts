@@ -84,8 +84,7 @@ const DEFINITION = [
   "",
 ].join("\n");
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let root = "";
 let base: BaseCellReference;
 const clientIds: string[] = [];

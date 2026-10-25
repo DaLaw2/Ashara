@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
+import { ClientRepository, createDb, resolveTestDatabaseUrl, type Database } from "@ashara/db";
 import {
   adaptWorkItemRepo,
   CoreLoop,
@@ -33,9 +33,8 @@ const NAME = `charge-row-locked-test-${randomUUID().slice(0, 8)}`;
 // Each poll is one query; the bound only ends a run whose charge never reaches the lock.
 const POLL_BOUND = 20_000;
 
-type Db = ReturnType<typeof createDb>;
 type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatch"]["dispatchService"]["execute"]>>;
-let db: Db;
+let db: Database;
 let root = "";
 
 beforeAll(async () => {

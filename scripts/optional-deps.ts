@@ -82,7 +82,13 @@ function isTestModule(file: string): boolean {
   return file.endsWith(".test.ts");
 }
 
-/** The non-test modules of packages/ that `entry` reaches by value imports the compiler resolves, itself included. */
+/**
+ * The non-test modules of packages/ that `entry` reaches by value imports the compiler resolves,
+ * itself included. A value import of a workspace subpath its package does not export, and a value
+ * load whose target is a template or computed, fail the scan: what it would reach cannot be read, and
+ * skipping it would pass the members it supplies as unsupplied. A program a module runs loads in a
+ * process of its own and supplies nothing to this one.
+ */
 function reachableModules(built: ModuleProgram, root: string, entry: string): ts.SourceFile[] {
   const packagesDir = path.join(root, "packages") + path.sep;
   const entrySource = built.sourceFile(entry);
@@ -91,6 +97,15 @@ function reachableModules(built: ModuleProgram, root: string, entry: string): ts
   const queue = [entrySource];
   for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
     for (const edge of moduleEdges(built, next.fileName)) {
+      const site = `${path.relative(root, next.fileName)}:${String(edge.line)}`;
+      if (!edge.typeOnly && edge.target.kind === "static") {
+        const gap = built.workspaceGap(edge.target.specifier);
+        if (gap !== null) throw new OptionalDepsScanError(site, `"${edge.target.specifier}" resolves to no module: ${gap}`);
+      }
+      if (!edge.typeOnly && edge.form !== "program" && edge.target.kind !== "static") {
+        const named = edge.target.kind === "template" ? `whose target begins \`${edge.target.prefix}\`` : "whose target is computed";
+        throw new OptionalDepsScanError(site, `a value load ${named} may reach any module, so what it supplies cannot be read`);
+      }
       const resolved = edge.typeOnly ? null : edge.resolved;
       if (resolved === null || !path.resolve(resolved).startsWith(packagesDir) || isTestModule(resolved)) continue;
       const sourceFile = built.sourceFile(path.resolve(resolved));

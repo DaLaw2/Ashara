@@ -1,7 +1,7 @@
 import { type ProjectId, type WorkItemId, type DomainEvent, createWorkItemId, createDomainEvent } from "@ashara/shared";
 import { IDLE_OPEN_WORK_ITEM_STATUSES, UNFAILED_OPEN_WORK_ITEM_STATUSES, type WorkItemLevel, type WorkItemStatus } from "../work-item-language/work-item-status.js";
 import type { StoredTaskSpec } from "../work-item-language/task-spec.js";
-import { type StoredBlockedReason, blockedReasonToRecord } from "../work-item-language/blocked-reason.js";
+import { type GivenUpReason, type StoredBlockedReason, blockedReasonToRecord } from "../work-item-language/blocked-reason.js";
 import type { StoredSuccessCriteria } from "../work-item-language/success-criteria.js";
 import type { WorkKind } from "../acl/organization-acl.js";
 import { canTransitionTo, InvalidStatusTransition } from "../work-item-language/transitions.js";
@@ -252,9 +252,6 @@ export function unblockWorkItem(item: WorkItem): void {
   );
 }
 
-/** Why a work item is given up: any recorded cause but a plan revision's supersession, which is supersedeWorkItem's. */
-type GiveUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded" }>;
-
 /**
  * Gives an item up: its work cannot be
  * done as planned, and no person decides what happens next. The item goes to the terminal
@@ -265,7 +262,7 @@ type GiveUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded"
  * Pending item the gate finds can never be dispatched, a Blocked item whose block has no exit that
  * clears by itself. A Failed item is the FailureRouter's to abandon.
  */
-export function giveUpWorkItem(item: WorkItem, reason: GiveUpReason): void {
+export function giveUpWorkItem(item: WorkItem, reason: GivenUpReason): void {
   const decidedHere = UNFAILED_OPEN_WORK_ITEM_STATUSES.includes(item.status);
   if (!decidedHere || !canTransitionTo(item.status, "Abandoned")) {
     throw new InvalidStatusTransition(item.id, item.status, "Abandoned");

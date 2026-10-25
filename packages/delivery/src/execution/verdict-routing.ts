@@ -29,8 +29,6 @@ import {
 } from "./reopen-routes.js";
 import type { ExecutionRoutingDeps } from "./routing-deps.js";
 
-/** What a dispatch returned. */
-
 /** A dispatch's result once routed. */
 export interface RoutedExecution {
   readonly result: TaskResult;

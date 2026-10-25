@@ -8,6 +8,7 @@ import type { Database } from "@ashara/db";
 import { createFirstPlanStore } from "@ashara/delivery";
 import { ClientAnswers, ClientChanges, ClientMessageRepository, ClientReceipts, TenderIntake, createProjectWithTender } from "@ashara/engagement";
 import type { AnswerStore, ClientChangeStore, ClientReceiptStore, IntakeStore } from "@ashara/engagement";
+import type { VisionGuarantee } from "@ashara/engagement/vision";
 import { DEFAULT_WORK_BUDGETS, GuardedModelAccess, LlmCallLedger, LlmCallRepository, SpendCap } from "@ashara/finance";
 import { buildGateway, sdkLanguageModels } from "@ashara/model-access";
 import type { ModelConfig } from "@ashara/model-access";
@@ -74,10 +75,10 @@ function answering(value: unknown): void {
   });
 }
 
-type Observation = "output" | "errors" | "exit-status" | "stored-data" | "undecided";
-
 /** A first reading of TENDER asking one question, its guarantees observed as `observations` say, in order G1, G2. */
-function reading(observations: readonly [Observation, Observation]) {
+type ClassifiedObservation = Exclude<VisionGuarantee["observation"] | "undecided", "unclassified">;
+
+function reading(observations: readonly [ClassifiedObservation, ClassifiedObservation]) {
   const quote = (text: string) => ({ kind: "tender", quote: text });
   return {
     summary: "A ledger of the client's entries.",
@@ -123,7 +124,7 @@ async function tendered(): Promise<ProjectId> {
 }
 
 /** The project's tender read with `observations`: vision v1 written, and the project's id. */
-async function readTender(observations: readonly [Observation, Observation]): Promise<ProjectId> {
+async function readTender(observations: readonly [ClassifiedObservation, ClassifiedObservation]): Promise<ProjectId> {
   const projectId = await tendered();
   answering(reading(observations));
   expect(await intake().runPending()).toMatchObject([{ kind: "recorded", projectId }]);
@@ -217,7 +218,7 @@ const UNDER_WAY = [
 ];
 
 /** G1 or G2 restated whole, observed in `observation`. */
-function restated(id: "G1" | "G2", observation: Observation) {
+function restated(id: "G1" | "G2", observation: ClassifiedObservation) {
   return {
     op: "amend-guarantee",
     id,

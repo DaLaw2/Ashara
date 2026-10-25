@@ -24,10 +24,9 @@ import { composedLoopOverTestDb } from "../loop-over-test-db.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `requeue-reads-main-test-${randomUUID().slice(0, 8)}`;
 
-type Db = Database;
 type ExecutionResult = Awaited<ReturnType<CoreLoopDeps["dispatch"]["dispatchService"]["execute"]>>;
 type Execute = CoreLoopDeps["dispatch"]["dispatchService"]["execute"];
-let db: Db;
+let db: Database;
 let root = "";
 
 beforeAll(async () => {

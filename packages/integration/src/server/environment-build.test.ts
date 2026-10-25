@@ -29,8 +29,7 @@ const run = promisify(execFile);
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let builds: EnvironmentBuildRepository;
 let projectId: ProjectId;
 let clientId = "";

@@ -4,7 +4,7 @@ import { sql } from "drizzle-orm";
 import { z } from "zod";
 import { ClientRepository, createDb, resolveTestDatabaseUrl } from "@ashara/db";
 import { DevSessionRepository } from "@ashara/workplace";
-import type { DbTransaction, Database } from "@ashara/db";
+import type { Database, DbHandle, DbTransaction } from "@ashara/db";
 import { PlanReports } from "@ashara/engagement";
 import type { PlanReportStore } from "@ashara/engagement";
 import { reconcileWorkItemsOnStartup, FailureRouter, PlanningService, adaptWorkItemRepo, failWorkItem, WorkItemRowRepository, ProjectHaltRepository } from "@ashara/delivery";
@@ -26,7 +26,6 @@ import { projectState } from "../simulator/project-state.js";
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME_PREFIX = `project-block-test-${randomUUID().slice(0, 8)}`;
 
-type Handle = Database | DbTransaction;
 
 let db: Database;
 let clientId: string;
@@ -51,7 +50,7 @@ const SCAFFOLD: TaskRow = { taskSpec: { origin: "product-scaffold", checkedBy: "
 const jsonb = (value: unknown) => (value === undefined ? sql`NULL` : sql`${JSON.stringify(value)}::jsonb`);
 
 /** A project with one epic and one task per row given; planned when `planned`. */
-async function projectWith(handle: Handle, tasks: readonly TaskRow[], planned: boolean) {
+async function projectWith(handle: DbHandle, tasks: readonly TaskRow[], planned: boolean) {
   const project = await new ProjectHaltRepository(handle).create(`${NAME_PREFIX}-${randomUUID().slice(0, 6)}`, clientId);
   ourProjects.add(project.id);
   const epicId = randomUUID();
@@ -78,19 +77,19 @@ const ProjectStateSchema = z.array(
   z.object({ status: z.string(), errorClass: z.string().nullable(), reason: z.string().nullable() }),
 );
 
-async function stateOf(handle: Handle, projectId: ProjectId) {
+async function stateOf(handle: DbHandle, projectId: ProjectId) {
   const result = await handle.execute(sql`
     SELECT ${projectState} AS status, (SELECT b.error_class FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "errorClass", (SELECT b.reason FROM project_blocks b WHERE b.project_id = projects.id AND b.ended_at IS NULL) AS "reason" FROM projects WHERE id = ${projectId}`);
   return ProjectStateSchema.parse(result.rows)[0];
 }
 
-async function statusOf(handle: Handle, itemId: string) {
+async function statusOf(handle: DbHandle, itemId: string) {
   const result = await handle.execute(sql`SELECT status FROM work_items WHERE id = ${itemId}`);
   return z.array(z.object({ status: z.string() })).parse(result.rows)[0]?.status;
 }
 
 /** The gate's view of project status, narrowed to this suite's projects. */
-function ourActiveProjects(handle: Handle) {
+function ourActiveProjects(handle: DbHandle) {
   const projects = new ProjectHaltRepository(handle);
   return {
     listActiveIds: async () => (await projects.listActiveIds()).filter((id) => ourProjects.has(id)),
@@ -98,7 +97,7 @@ function ourActiveProjects(handle: Handle) {
   };
 }
 
-function reports(handle: Handle): PlanReports {
+function reports(handle: DbHandle): PlanReports {
   const store = createPlanReportStore(handle);
   const ours: PlanReportStore = {
     ...store,
@@ -108,7 +107,7 @@ function reports(handle: Handle): PlanReports {
   return new PlanReports(ours, memoryStepContainment(() => true));
 }
 
-async function gate(handle: Handle) {
+async function gate(handle: DbHandle) {
   return (await PlanningService.gate(adaptWorkItemRepo(new WorkItemRowRepository(handle)), ourActiveProjects(handle), { publish: async () => {} }, memoryStepContainment(() => true), recordingLogger())).available;
 }
 
@@ -270,14 +269,14 @@ describe("one project's bad record at startup", () => {
 describe("a parked Failed item at startup is routed by the verdict saved with its Failed transition", () => {
   const VerdictRowSchema = z.array(z.object({ status: z.string(), dispatchCount: z.number(), failureVerdict: z.unknown() }));
 
-  async function rowOf(handle: Handle, itemId: string) {
+  async function rowOf(handle: DbHandle, itemId: string) {
     const result = await handle.execute(sql`
       SELECT status, dispatch_count AS "dispatchCount", failure_verdict AS "failureVerdict" FROM work_items WHERE id = ${itemId}`);
     return VerdictRowSchema.parse(result.rows)[0];
   }
 
   /** Fails an InProgress task as the dispatch path does, through the repository's save, after one counted dispatch. */
-  async function failWith(handle: Handle, itemId: string, verdict: Parameters<typeof failWorkItem>[2]): Promise<void> {
+  async function failWith(handle: DbHandle, itemId: string, verdict: Parameters<typeof failWorkItem>[2]): Promise<void> {
     await handle.execute(sql`UPDATE work_items SET dispatch_count = 1 WHERE id = ${itemId}`);
     const repo = adaptWorkItemRepo(new WorkItemRowRepository(handle));
     const item = await repo.findById(parseWorkItemId(itemId, "test"));

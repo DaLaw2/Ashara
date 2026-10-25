@@ -454,6 +454,9 @@ const storedBlockedReasonSchema = z.discriminatedUnion("source", [
 
 export type StoredBlockedReason = z.infer<typeof storedBlockedReasonSchema>;
 
+/** Why a work item is given up: any recorded cause but a plan revision's supersession, which supersedes the item instead. */
+export type GivenUpReason = Exclude<StoredBlockedReason, { readonly source: "superseded" }>;
+
 /**
  * How a task's recorded commit closed it: Z0's own merge, or main's commit at which
  * the task, having changed nothing, passed its checks and the regression suite (already delivered).

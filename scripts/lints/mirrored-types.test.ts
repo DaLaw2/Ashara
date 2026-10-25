@@ -78,6 +78,33 @@ describe("mirrored-types", () => {
     expect(found({ quality: { "dispatch-result.ts": pair }, server: { "store.ts": alias } })).toEqual(["packages/quality/src/dispatch-result.ts:1", "packages/server/src/store.ts:1"]);
   });
 
+  test("two generic declarations are one type when instantiated over one set of type parameters; one that uses its parameter elsewhere is not", () => {
+    const page = "export interface Page<T> { readonly items: readonly T[]; readonly next: string | null; readonly total: number }\n";
+    const listing = "export type Listing<U> = { readonly items: readonly U[]; readonly next: string | null; readonly total: number };\n";
+    const other = "export interface Cursor<T> { readonly items: readonly T[]; readonly next: T; readonly total: number }\n";
+    const reasons = mirroredTypes(packagesTree({ quality: { "page.ts": page }, engagement: { "listing.ts": listing, "cursor.ts": other } }), []).filter((v) => v.line > 0).map((v) => v.reason);
+    expect(reasons).toEqual([expect.stringMatching(/^one type declared under more than one name: Page at packages\/quality\/src\/page\.ts:1, Listing at packages\/engagement\/src\/listing\.ts:1;/)]);
+  });
+
+  test("two unions of one shape under other names are one type; a union of two literals is too small to be read as a copy", () => {
+    const outcome = 'export type Outcome = { readonly kind: "ok"; readonly value: number } | { readonly kind: "failed"; readonly reason: string };\nexport type Side = "left" | "right";\n';
+    const result = 'export type Result = { kind: "ok"; value: number } | { kind: "failed"; reason: string };\nexport type Hand = "left" | "right";\n';
+    expect(found({ quality: { "outcome.ts": outcome }, engagement: { "result.ts": result } })).toEqual(["packages/quality/src/outcome.ts:1"]);
+  });
+
+  test("a test's copy of a type, or its alias naming one whole, is a violation; a test's alias derived by a type operator is not", () => {
+    const owner = 'export interface Finding { readonly file: string; readonly line: number; readonly reason: string }\nexport function find(): Finding {\n  return { file: "f", line: 1, reason: "r" };\n}\n';
+    const test = [
+      'import { find, type Finding } from "./finding.js";',
+      "type Whole = Finding;",
+      "type Derived = ReturnType<typeof find>;",
+      "interface Copy { readonly file: string; readonly line: number; readonly reason: string }",
+      "export const all: [Whole, Derived, Copy] = [find(), find(), find()];",
+    ].join("\n");
+    const reasons = mirroredTypes(packagesTree({ quality: { "finding.ts": owner, "finding.test.ts": test } }), []).filter((v) => v.line > 0).map((v) => v.reason);
+    expect(reasons).toEqual([expect.stringMatching(/^one type declared under more than one name: Finding at packages\/quality\/src\/finding\.ts:1, Whole at packages\/quality\/src\/finding\.test\.ts:2, Copy at packages\/quality\/src\/finding\.test\.ts:4;/)]);
+  });
+
   test("one property set whose types differ is no copy: a field one of them narrows keeps them apart", () => {
     const owner = 'export interface Check { readonly taskId: string; readonly name: string; readonly outcome: "passed" | "failed" }\n';
     const wider = "export interface CheckRead { readonly taskId: string; readonly name: string; readonly outcome: string }\n";

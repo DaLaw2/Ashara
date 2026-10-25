@@ -34,8 +34,7 @@ const MODEL: ModelConfig = {
   priceTiers: [], datedPrices: [],
 };
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let calls: LlmCallRepository;
 let projects: ProjectRepository;
 let clientId: string;

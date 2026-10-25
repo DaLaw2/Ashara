@@ -9,22 +9,39 @@
  * - a call or `new` whose callee the checker types as a module loader, whatever name, alias,
  *   destructuring, namespace or re-export it is reached through. The loaders are the declarations
  *   the checker finds for Node's `require` (a `createRequire(...)` result is one), its `resolve`
- *   and `module.require`, vitest's `mock`, `doMock`, `importActual` and `importMock`,
- *   `import.meta`'s `resolve` and `glob`, and the constructor of `node:worker_threads`' Worker,
- *   whose `new URL("...", import.meta.url)` argument names the module by its first argument.
+ *   and `module.require`, vitest's `mock`, `doMock`, `importActual` and `importMock`, `node:test`'s
+ *   `mock.module`,
+ *   `import.meta`'s `resolve`, `node:child_process`' `fork`, whose first parameter is the module
+ *   it runs, `node:module`'s `runMain` and `register` (whose specifier names a module as this one's
+ *   would only against `import.meta.url` as its parent, and is computed against any other), and the
+ *   constructor of `node:worker_threads`' Worker; a `new URL("...", import.meta.url)`
+ *   argument names the module by its first argument. `import.meta.glob` takes patterns, never a
+ *   module's name: each pattern is an edge to every module its static prefix begins. `process.dlopen`
+ *   names a native module by a path resolved against the working directory, never this module, so
+ *   it is a computed edge;
+ * - a call whose callee the checker types as any other function `node:child_process` exports
+ *   (spawn, exec, execFile, their sync and promisified forms), reached as a loader value is: it runs
+ *   a program, which may be Node loading the modules its arguments name, and which argument does is
+ *   no fact of the code, so it is a computed edge of form `program`; so is `node:cluster`'s `fork`,
+ *   which runs the module a settings call made anywhere before names, `node:test`'s `run`, which
+ *   loads the test files its options name or it discovers, and a `fork` or Worker given an option
+ *   (`execArgv`, `execPath`, `env`) that may name a module Node loads first or the program it runs.
  *
- * A loader value is one whose type is a loader or reaches one (through a property, a call's result
- * or parameter, a type argument, what a promise of it awaits to) at any depth through types the
- * repository writes or a type is written of, and within two steps through the members of types it
- * does not write (holdsLoader): `require`, `vi`, `import.meta`, `process` (through `mainModule`), a
+ * A loader value is one whose type is a loader or reaches one (through a property, an index
+ * signature's value, a call's result or parameter, a type argument, what a promise of it awaits to) at any depth through types the
+ * repository writes (its declaration files among them) or a type is written of, and within two
+ * steps through the members of the lib's and node_modules' types (holdsLoader): `require`, `vi`, `import.meta`, `process` (through `mainModule`), a
  * module namespace that exports one. Such a value enters a module only through a name the checker
  * resolves to a declaration outside the repository's sources, through `import.meta`, through an
  * `import(...)` call's namespace, or through a type annotation (an `import("...")` type among
  * them); every use of it is followed from there by the checker's types and symbols across bindings,
  * imports and re-exports (followLoaders), so a call no loader value reaches is never typed.
  * Vitest's loaders are read from the vitest module itself, and a global is a loader only as a
- * declaration file declares it, so a script of the program that declares a global of the same name
- * stands for none.
+ * declaration file declares it: a module of the program that declares such a global ambiently
+ * (`declare global`) or merges a type into it, and a module that declares the name ambiently over
+ * it (`declare const require`), fail the read where they declare it, since the calls through that
+ * name may still load a module; so does a script that binds a loader value to a global another
+ * declaration already holds, whose uses the checker binds to that declaration.
  *
  * A loader's argument that is a string literal names its module whole; a template literal names it
  * up to its first substitution; anything else is a computed edge, which a consumer holds as one
@@ -36,8 +53,12 @@
  * vitest), a require the checker types `any` of a module that exports a loader value, or of a module
  * the program does not hold whose result is used with no declared type, a member of a loader value
  * read by a computed key, a loader called as a template tag
- * or through Function's own members (`call`, `apply`, `bind`), and a loader value passed as an
- * argument, put in an array or an object, returned, thrown or yielded, assigned to a property, cast
+ * or through Function's own members (`call`, `apply`, `bind`), a call or `new` of `eval`, of
+ * `Function` or of anything `node:vm` exports, whichever way it is reached (an indirect
+ * `(0, eval)(...)` among them), and a Worker whose options may set `eval`, each of which runs a
+ * string as code that may load any module, and a loader value passed as an argument (save a
+ * program runner passed to a call the checker types as returning one, as `promisify(execFile)`
+ * does, which is followed through that result), put in an array or an object, returned, thrown or yielded, assigned to a property, cast
  * or given a declared type that holds no loader, or used anywhere else this reader does not follow.
  */
 
@@ -54,8 +75,8 @@ export type ImportTarget =
   | { readonly kind: "template"; readonly prefix: string }
   | { readonly kind: "computed" };
 
-/** The construct an edge is written as. */
-type EdgeForm = "import" | "export" | "import-equals" | "import-type" | "dynamic" | "require" | "loader";
+/** The construct an edge is written as; `program` runs a program in a process of its own, which hands this module no binding. */
+type EdgeForm = "import" | "export" | "import-equals" | "import-type" | "dynamic" | "require" | "loader" | "program";
 
 /** One name of a brace clause: the name the target module exports, the name it is bound to here. */
 interface ClauseName {
@@ -84,9 +105,9 @@ export interface ImportEdge {
   readonly locals: readonly string[];
   /** The file the compiler resolves a literal specifier to; null for any other target, and for a specifier it resolves to none. */
   readonly resolved: string | null;
-  /** The 1-based line the specifier starts on, or the call's when it has no argument. */
+  /** The 1-based line the specifier starts on, the call's when it has no argument, or a program edge's callee's. */
   readonly line: number;
-  /** The specifier's offsets in the text, quotes included, or the call's when it has no argument. */
+  /** The specifier's offsets in the text, quotes included, the call's when it has no argument, or a program edge's callee's, since its arguments name a program, not a module. */
   readonly start: number;
   readonly end: number;
 }
@@ -122,10 +143,32 @@ interface ReadFailure {
 interface Loaders {
   /** Call signatures of Node's require and of its resolve. */
   readonly require: ReadonlySet<ts.Declaration>;
-  /** Call or construct signatures of every other loader. */
+  /** Call or construct signatures of every other loader that names its module. */
   readonly loader: ReadonlySet<ts.Declaration>;
+  /** Call signatures of a loader that resolves its first argument against its second, a parent URL: `node:module`'s `register`. */
+  readonly parented: ReadonlySet<ts.Declaration>;
+  /** Call signatures of a loader that takes patterns of modules: `import.meta.glob`. */
+  readonly pattern: ReadonlySet<ts.Declaration>;
+  /** Call or construct signatures that run a string as code: `eval`, `Function`, every function and class `node:vm` exports. */
+  readonly evaluate: ReadonlySet<ts.Declaration>;
+  /** Call signatures that run a program, which may be Node itself: every function `node:child_process` exports but fork, and their promisified forms. */
+  readonly program: ReadonlySet<ts.Declaration>;
+  /** Construct signatures of `node:worker_threads`' Worker, which runs its first argument as code when its options set `eval`. */
+  readonly worker: ReadonlySet<ts.Declaration>;
+  /** Call signatures of a loader whose second argument names a native module by a path the process resolves against its working directory, never against this module: `process.dlopen`. */
+  readonly native: ReadonlySet<ts.Declaration>;
+  /**
+   * The options, by the call or construct signature of a loader that starts Node, that may name a
+   * module Node loads before the one its first argument names, or the program it runs instead:
+   * `fork`'s `execArgv`, `execPath` and `env` (whose NODE_OPTIONS Node reads), a Worker's `execArgv`.
+   */
+  readonly startOptions: ReadonlyMap<ts.Declaration, readonly string[]>;
+  /** Declarations of a global a loader is read from, made by a module of the program rather than a declaration file. */
+  readonly shadows: readonly ts.Declaration[];
   /** Construct signatures of the global URL. */
   readonly url: ReadonlySet<ts.Declaration>;
+  /** `import.meta`'s `url`: the parent URL against which a `parented` loader resolves its specifier as this module would. */
+  readonly metaUrl: ts.Symbol | undefined;
   /** Function, CallableFunction and NewableFunction: a member declared on one calls the loader it is read off. */
   readonly functionMembers: ReadonlySet<ts.Symbol>;
 }
@@ -145,18 +188,54 @@ function isDeclaredAmbiently(symbol: ts.Symbol): boolean {
   return declarations !== undefined && declarations.length > 0 && declarations.every((declaration) => declaration.getSourceFile().isDeclarationFile);
 }
 
+/**
+ * Whether a declaration of a global states what the name is with no value of it for the flows to
+ * follow: an ambient one (`declare`, `declare global`) or a type merged into the global's.
+ */
+function isUnfollowed(declaration: ts.Declaration): boolean {
+  return isDeclaredWithDeclare(declaration) || ts.isInterfaceDeclaration(declaration) || ts.isTypeAliasDeclaration(declaration);
+}
+
+/** Whether `node`, or a declaration it is written in, has the `declare` modifier. */
+function isDeclaredWithDeclare(node: ts.Node): boolean {
+  for (let at: ts.Node | undefined = node; at !== undefined; at = at.parent) {
+    if (ts.canHaveModifiers(at) && ts.getModifiers(at)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) === true) return true;
+  }
+  return false;
+}
+
 function findLoaders(built: ModuleProgram): Loaders {
   const checker = built.checker;
   const requires = new Set<ts.Declaration>();
   const loaders = new Set<ts.Declaration>();
+  const patterns = new Set<ts.Declaration>();
+  const parented = new Set<ts.Declaration>();
+  const evaluators = new Set<ts.Declaration>();
+  const programs = new Set<ts.Declaration>();
+  const workers = new Set<ts.Declaration>();
+  const natives = new Set<ts.Declaration>();
+  const startOptions = new Map<ts.Declaration, readonly string[]>();
   const urls = new Set<ts.Declaration>();
+  const shadows: ts.Declaration[] = [];
   const global = (name: string, meaning: ts.SymbolFlags): ts.Symbol | undefined => {
     const symbol = checker.resolveName(name, undefined, meaning, false);
-    return symbol !== undefined && isDeclaredAmbiently(symbol) ? symbol : undefined;
+    if (symbol === undefined) return undefined;
+    if (isDeclaredAmbiently(symbol)) return symbol;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a symbol with no declaration is declared by no module
+    shadows.push(...(symbol.declarations ?? []).filter((declaration) => !declaration.getSourceFile().isDeclarationFile && isUnfollowed(declaration)));
+    return undefined;
   };
   const addCalls = (into: Set<ts.Declaration>, type: ts.Type | undefined): void => {
     if (type !== undefined) for (const declaration of signatureDeclarations(checker, type, ts.SignatureKind.Call)) into.add(declaration);
   };
+  const addConstructs = (into: Set<ts.Declaration>, type: ts.Type | undefined): void => {
+    if (type !== undefined) for (const declaration of signatureDeclarations(checker, type, ts.SignatureKind.Construct)) into.add(declaration);
+  };
+  const ambientExports = (module: string): ts.Symbol[] => {
+    const declared = checker.getAmbientModules().find((symbol) => symbol.name === JSON.stringify(module));
+    return declared === undefined ? [] : checker.getExportsOfModule(declared);
+  };
+  const ambientExport = (module: string, name: string): ts.Symbol | undefined => ambientExports(module).find((symbol) => symbol.name === name);
   const requireSymbol = global("require", ts.SymbolFlags.Value);
   if (requireSymbol !== undefined) {
     const requireType = checker.getTypeOfSymbol(requireSymbol);
@@ -165,6 +244,10 @@ function findLoaders(built: ModuleProgram): Loaders {
   }
   const moduleSymbol = global("module", ts.SymbolFlags.Value);
   if (moduleSymbol !== undefined) addCalls(requires, memberType(checker, checker.getTypeOfSymbol(moduleSymbol), "require"));
+  const hooks = ambientExport("module", "register");
+  if (hooks !== undefined) addCalls(parented, checker.getTypeOfSymbol(hooks));
+  const runMain = ambientExport("module", "runMain");
+  if (runMain !== undefined) addCalls(loaders, checker.getTypeOfSymbol(runMain));
   const vitestModule = built.moduleSymbol(path.join(built.root, "index.ts"), "vitest");
   const exportedVi = vitestModule === undefined ? undefined : checker.getExportsOfModule(vitestModule).find((symbol) => symbol.name === "vi");
   for (const vitest of [global("vi", ts.SymbolFlags.Value), exportedVi]) {
@@ -173,21 +256,58 @@ function findLoaders(built: ModuleProgram): Loaders {
     for (const method of ["mock", "doMock", "importActual", "importMock"]) addCalls(loaders, memberType(checker, utils, method));
   }
   const importMeta = global("ImportMeta", ts.SymbolFlags.Type);
+  const metaUrl = importMeta === undefined ? undefined : checker.getPropertyOfType(checker.getDeclaredTypeOfSymbol(importMeta), "url");
   if (importMeta !== undefined) {
     const meta = checker.getDeclaredTypeOfSymbol(importMeta);
-    for (const method of ["resolve", "glob"]) addCalls(loaders, memberType(checker, meta, method));
+    addCalls(loaders, memberType(checker, meta, "resolve"));
+    addCalls(patterns, memberType(checker, meta, "glob"));
   }
-  const workerThreads = checker.getAmbientModules().find((module) => module.name === '"worker_threads"');
-  const worker = workerThreads === undefined ? undefined : checker.getExportsOfModule(workerThreads).find((symbol) => symbol.name === "Worker");
-  if (worker !== undefined) for (const declaration of signatureDeclarations(checker, checker.getTypeOfSymbol(worker), ts.SignatureKind.Construct)) loaders.add(declaration);
+  const worker = ambientExport("worker_threads", "Worker");
+  if (worker !== undefined) {
+    addConstructs(loaders, checker.getTypeOfSymbol(worker));
+    addConstructs(workers, checker.getTypeOfSymbol(worker));
+    for (const declaration of signatureDeclarations(checker, checker.getTypeOfSymbol(worker), ts.SignatureKind.Construct)) startOptions.set(declaration, ["execArgv"]);
+  }
+  const fork = ambientExport("child_process", "fork");
+  if (fork !== undefined) {
+    addCalls(loaders, checker.getTypeOfSymbol(fork));
+    for (const declaration of signatureDeclarations(checker, checker.getTypeOfSymbol(fork), ts.SignatureKind.Call)) startOptions.set(declaration, ["execArgv", "execPath", "env"]);
+  }
+  const testMock = ambientExport("node:test", "mock");
+  if (testMock !== undefined) addCalls(loaders, memberType(checker, checker.getTypeOfSymbol(testMock), "module"));
+  const testRun = ambientExport("node:test", "run");
+  if (testRun !== undefined) addCalls(programs, checker.getTypeOfSymbol(testRun));
+  const processSymbol = global("process", ts.SymbolFlags.Value);
+  if (processSymbol !== undefined) addCalls(natives, memberType(checker, checker.getTypeOfSymbol(processSymbol), "dlopen"));
+  const cluster = ambientExport("cluster", "default");
+  if (cluster !== undefined) addCalls(programs, memberType(checker, checker.getTypeOfSymbol(cluster), "fork"));
+  for (const exported of ambientExports("child_process")) {
+    if ((exported.flags & ts.SymbolFlags.Value) === 0 || exported === fork) continue;
+    const runner = checker.getTypeOfSymbol(exported);
+    if (checker.getSignaturesOfType(runner, ts.SignatureKind.Call).length === 0) continue;
+    addCalls(programs, runner);
+    for (const member of checker.getPropertiesOfType(runner)) addCalls(programs, checker.getTypeOfSymbol(member));
+  }
+  for (const exported of ambientExports("vm")) {
+    if ((exported.flags & ts.SymbolFlags.Value) === 0) continue;
+    addCalls(evaluators, checker.getTypeOfSymbol(exported));
+    addConstructs(evaluators, checker.getTypeOfSymbol(exported));
+  }
   const url = global("URL", ts.SymbolFlags.Value);
-  if (url !== undefined) for (const declaration of signatureDeclarations(checker, checker.getTypeOfSymbol(url), ts.SignatureKind.Construct)) urls.add(declaration);
+  if (url !== undefined) addConstructs(urls, checker.getTypeOfSymbol(url));
+  const evaluate = global("eval", ts.SymbolFlags.Value);
+  if (evaluate !== undefined) addCalls(evaluators, checker.getTypeOfSymbol(evaluate));
+  const functionConstructor = global("Function", ts.SymbolFlags.Value);
+  if (functionConstructor !== undefined) {
+    addCalls(evaluators, checker.getTypeOfSymbol(functionConstructor));
+    addConstructs(evaluators, checker.getTypeOfSymbol(functionConstructor));
+  }
   const functionMembers = new Set<ts.Symbol>();
   for (const name of ["Function", "CallableFunction", "NewableFunction"]) {
     const symbol = global(name, ts.SymbolFlags.Type);
     if (symbol !== undefined) functionMembers.add(symbol);
   }
-  return { require: requires, loader: loaders, url: urls, functionMembers };
+  return { require: requires, loader: loaders, parented, pattern: patterns, evaluate: evaluators, program: programs, worker: workers, native: natives, startOptions, url: urls, metaUrl, functionMembers, shadows };
 }
 
 /** One module's loader edges and the loads it cannot classify, as the program's flows found them. */
@@ -221,12 +341,20 @@ function constituents(type: ts.Type): readonly ts.Type[] {
   return type.isUnionOrIntersection() ? type.types.flatMap(constituents) : [type];
 }
 
+/** How a call of a loader names what it loads: a module by its first argument (`require`, `loader`, or `parented`, resolved against its second), patterns of modules, code run from a string, or a program run. */
+type LoaderForm = "require" | "loader" | "parented" | "pattern" | "native" | "evaluate" | "program";
+
 /** How a callee of `type` loads a module when called (`kind` Call) or constructed (`kind` Construct); null when it loads none. */
-function loaderForm(checker: ts.TypeChecker, loaders: Loaders, type: ts.Type, kind: ts.SignatureKind): "require" | "loader" | null {
+function loaderForm(checker: ts.TypeChecker, loaders: Loaders, type: ts.Type, kind: ts.SignatureKind): LoaderForm | null {
   for (const part of constituents(type)) {
     for (const declaration of signatureDeclarations(checker, part, kind)) {
       if (loaders.require.has(declaration)) return "require";
       if (loaders.loader.has(declaration)) return "loader";
+      if (loaders.parented.has(declaration)) return "parented";
+      if (loaders.pattern.has(declaration)) return "pattern";
+      if (loaders.native.has(declaration)) return "native";
+      if (loaders.evaluate.has(declaration)) return "evaluate";
+      if (loaders.program.has(declaration)) return "program";
     }
   }
   return null;
@@ -241,7 +369,7 @@ type Held = Pick<ProgramReading, "loaders" | "program" | "held">;
 /**
  * The types a value of `part` reaches in one step: `subterms` are the types it is written of (a
  * type argument, what a promise of it awaits to), and `members` the types the checker instantiates
- * for it (a property, a call's or construct's result or parameter).
+ * for it (a property, an index signature's value, a call's or construct's result or parameter).
  */
 function reachedTypes(checker: ts.TypeChecker, part: ts.Type): { readonly subterms: readonly ts.Type[]; readonly members: () => readonly ts.Type[] } {
   const subterms = isTypeReference(part) ? [...checker.getTypeArguments(part)] : [];
@@ -251,6 +379,7 @@ function reachedTypes(checker: ts.TypeChecker, part: ts.Type): { readonly subter
     const signatures = [...checker.getSignaturesOfType(part, ts.SignatureKind.Call), ...checker.getSignaturesOfType(part, ts.SignatureKind.Construct)];
     const reached = signatures.flatMap((signature) => [checker.getReturnTypeOfSignature(signature), ...signature.getParameters().map((parameter) => checker.getTypeOfSymbol(parameter))]);
     for (const property of checker.getPropertiesOfType(part)) reached.push(checker.getTypeOfSymbol(property));
+    for (const index of checker.getIndexInfosOfType(part)) reached.push(index.type);
     return reached;
   };
   return { subterms, members };
@@ -261,8 +390,8 @@ function isLoaderType(checker: ts.TypeChecker, loaders: Loaders, part: ts.Type):
 }
 
 /**
- * The steps a walk takes through the members of types the repository does not write (Node's,
- * vitest's, the lib's) within which a value that reaches a loader holds one: those types never change, and every loader
+ * The steps a walk takes through the members of the lib's and node_modules' types (Node's,
+ * vitest's) within which a value that reaches a loader holds one: those types never change, and every loader
  * they hold lies within this many steps of the value that holds it, while walking them without a
  * bound instantiates their generics without end.
  */
@@ -271,14 +400,18 @@ const DECLARED_STEPS = 2;
 /** How many instantiations of one declaration a walk nests before it reads the next as the outermost again, so a recursive generic the repository writes stays finite. */
 const NESTED_INSTANTIATIONS = 3;
 
-/** Whether `type` is declared in a module the repository writes, not a declaration file: a walk out of it takes no step. A type with no declaration (a tuple, a primitive) is none. */
+/**
+ * Whether `type` is declared in a file the repository writes, a declaration file among them, not the
+ * lib's or node_modules': a walk out of it takes no step, since a loader may lie at any depth in it.
+ * A type with no declaration (a tuple, a primitive) is none.
+ */
 function isWrittenHere(program: ts.Program, type: ts.Type): boolean {
   const declared = type.aliasSymbol ?? type.getSymbol();
   const declarations = declared?.declarations;
   if (declarations === undefined || declarations.length === 0) return false;
   return declarations.some((declaration) => {
     const source = declaration.getSourceFile();
-    return !source.isDeclarationFile && !program.isSourceFileFromExternalLibrary(source);
+    return !program.isSourceFileFromExternalLibrary(source) && !program.isSourceFileDefaultLibrary(source);
   });
 }
 
@@ -366,17 +499,26 @@ function rootName(expression: ts.Expression): ts.Identifier | null {
   return null;
 }
 
+/** The module specifier of the import or export-from declaration `node` is written in; undefined when it is in neither. */
+function aliasSpecifier(node: ts.Node | undefined): ts.Expression | undefined {
+  for (let at = node; at !== undefined; at = at.parent) {
+    if (ts.isImportDeclaration(at) || ts.isExportDeclaration(at)) return at.moduleSpecifier;
+  }
+  return undefined;
+}
+
 /**
  * The module an imported name `expression` is read through should export it from, when that module
- * does not (a default import of a module with none); null when the name resolves, or is no import.
+ * does not (a default import of a module with none), followed through each import and re-export of
+ * the name to the one whose module lacks it; null when the name resolves, or is no import.
  */
 function moduleLackingName(checker: ts.TypeChecker, expression: ts.Expression): ts.Symbol | null {
   const root = rootName(expression);
-  const symbol = root === null ? undefined : checker.getSymbolAtLocation(root);
+  let symbol = root === null ? undefined : checker.getSymbolAtLocation(root);
   if (symbol === undefined || (symbol.flags & ts.SymbolFlags.Alias) === 0 || checker.getAliasedSymbol(symbol).declarations !== undefined) return null;
-  let declaration: ts.Node | undefined = symbol.declarations?.at(0);
-  while (declaration !== undefined && !ts.isImportDeclaration(declaration)) declaration = declaration.parent;
-  return declaration === undefined ? null : (checker.getSymbolAtLocation(declaration.moduleSpecifier) ?? null);
+  for (let next = checker.getImmediateAliasedSymbol(symbol); next?.declarations !== undefined && (next.flags & ts.SymbolFlags.Alias) !== 0; next = checker.getImmediateAliasedSymbol(next)) symbol = next;
+  const specifier = aliasSpecifier(symbol.declarations?.at(0));
+  return specifier === undefined ? null : (checker.getSymbolAtLocation(specifier) ?? null);
 }
 
 /** Whether `symbol` is a member Function, CallableFunction or NewableFunction declares. */
@@ -443,6 +585,7 @@ class LoaderFlows {
     const modules = program.getSourceFiles().filter((source) => !source.isDeclarationFile && !program.isSourceFileFromExternalLibrary(source));
     this.loads = new Map(modules.map((source): [string, ModuleLoads] => [source.fileName, { edges: [], failures: [] }]));
     for (const source of modules) this.index(source);
+    for (const declaration of reading.loaders.shadows) this.fail(declaration, "a module of the program declares a global a module loader is read from, so the checker no longer finds that loader and the calls through it cannot be read; declare it in a declaration file, or not at all");
   }
 
   /** Follows every loader value from where it enters the program, and returns each module's loads. */
@@ -503,6 +646,26 @@ class LoaderFlows {
       ts.forEachChild(node, visit);
     };
     visit(source);
+    if (ts.isExternalModule(source)) for (const statement of source.statements) this.ambientShadow(statement);
+  }
+
+  /**
+   * A statement of a module that declares a name ambiently (`declare const require`) where the
+   * checker finds a global of that name that holds a module loader: the declaration hides the loader
+   * from the checker, while at runtime the name may still be that loader.
+   */
+  private ambientShadow(statement: ts.Statement): void {
+    if (!isDeclaredWithDeclare(statement)) return;
+    const names: ts.Identifier[] = [];
+    if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) if (ts.isIdentifier(declaration.name)) names.push(declaration.name);
+    const augmentsGlobal = (statement.flags & ts.NodeFlags.GlobalAugmentation) !== 0;
+    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && !augmentsGlobal && statement.name !== undefined && ts.isIdentifier(statement.name)) names.push(statement.name);
+    for (const name of names) {
+      const shadowed = this.checker.resolveName(name.text, undefined, ts.SymbolFlags.Value, false);
+      if (shadowed !== undefined && isDeclaredAmbiently(shadowed) && this.symbolHolds(shadowed)) {
+        this.fail(name, `the module declares \`${name.text}\` ambiently over the global of that name, which holds a module loader, so the calls through it cannot be read; import what it stands for instead`);
+      }
+    }
   }
 
   /**
@@ -513,6 +676,59 @@ class LoaderFlows {
     const lacking = moduleLackingName(this.checker, call.expression);
     if (lacking === null || !isAnyTyped(this.typeAt(call.expression)) || !this.holds(this.checker.getTypeOfSymbol(lacking))) return;
     this.fail(call, "the checker types this callee `any`, read through a name its module does not export while that module exports a module loader, so whether the call loads a module cannot be read");
+  }
+
+  /**
+   * A call that runs a program: the program may be Node, whose arguments then name the modules it
+   * loads, and which of them do is no fact of the code, so the call is a computed edge, one a
+   * consumer holds as loading anything.
+   */
+  private programRun(call: ts.CallExpression | ts.NewExpression): void {
+    const source = call.getSourceFile();
+    const spec = call.expression;
+    const start = spec.getStart(source);
+    this.loads.get(source.fileName)?.edges.push({ target: { kind: "computed" }, form: "program", typeOnly: false, clause: { kind: "none" }, locals: [], resolved: null, line: source.getLineAndCharacterOfPosition(start).line + 1, start, end: spec.getEnd() });
+  }
+
+  /**
+   * Whether a `new` of a Worker may run its first argument as code: its options' `eval` is typed
+   * other than `false` or absent, or the checker types the options `any`.
+   */
+  private runsAsCode(call: ts.CallExpression | ts.NewExpression, calleeType: ts.Type): boolean {
+    if (!ts.isNewExpression(call) || !signatureDeclarations(this.checker, calleeType, ts.SignatureKind.Construct).some((declaration) => this.reading.loaders.worker.has(declaration))) return false;
+    const options = call.arguments?.at(1);
+    if (options === undefined) return false;
+    const optionsType = this.typeAt(options);
+    if (isAnyTyped(optionsType)) return true;
+    const off = [this.checker.getFalseType(), this.checker.getUndefinedType()];
+    return constituents(this.checker.getNonNullableType(optionsType)).some((part) => {
+      const evaluates = this.checker.getPropertyOfType(part, "eval");
+      return evaluates !== undefined && !constituents(this.checker.getTypeOfSymbol(evaluates)).every((value) => off.includes(value));
+    });
+  }
+
+  /**
+   * Whether a call or `new` of a loader that starts Node (fork, a Worker) passes an option that may
+   * name a module Node loads first or the program it runs instead: one of its start options typed
+   * other than absent, or an argument after the first the checker types `any`.
+   */
+  private startsNodeWith(call: ts.CallExpression | ts.NewExpression, calleeType: ts.Type): boolean {
+    const kind = ts.isNewExpression(call) ? ts.SignatureKind.Construct : ts.SignatureKind.Call;
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a signature with no start options starts no Node with any
+    const names = new Set(signatureDeclarations(this.checker, calleeType, kind).flatMap((declaration) => this.reading.loaders.startOptions.get(declaration) ?? []));
+    if (names.size === 0) return false;
+    const absent = this.checker.getUndefinedType();
+    // eslint-disable-next-line no-restricted-syntax -- policy default: a `new` with no argument list passes no options
+    return (call.arguments ?? []).slice(1).some((argument) => {
+      const argumentType = this.typeAt(argument);
+      if (isAnyTyped(argumentType)) return true;
+      return constituents(this.checker.getNonNullableType(argumentType)).some((part) =>
+        [...names].some((name) => {
+          const option = this.checker.getPropertyOfType(part, name);
+          return option !== undefined && !constituents(this.checker.getTypeOfSymbol(option)).every((value) => value === absent);
+        }),
+      );
+    });
   }
 
   private enqueue(symbol: ts.Symbol | undefined): void {
@@ -528,28 +744,59 @@ class LoaderFlows {
     return valueHolds || ((symbol.flags & ts.SymbolFlags.Type) !== 0 && this.holds(this.checker.getDeclaredTypeOfSymbol(symbol)));
   }
 
-  /** Follows each name `name` binds whose type holds a loader. */
+  /**
+   * Follows each name `name` binds whose type holds a loader. A script's top-level binding is a
+   * global, and where another declaration of the program already holds that global's name (a lib's
+   * `open`) the checker binds the binding's uses to that one, so they cannot be followed.
+   */
   private bind(name: ts.BindingName): void {
     if (ts.isIdentifier(name)) {
       const symbol = this.checker.getSymbolAtLocation(name);
-      if (symbol !== undefined && this.symbolHolds(symbol)) this.enqueue(symbol);
+      if (symbol === undefined || !this.symbolHolds(symbol)) return;
+      if (isScriptGlobal(name) && this.checker.resolveName(name.text, undefined, ts.SymbolFlags.Value, false) !== symbol) {
+        this.fail(name, `the script binds a module loader (or a value that holds one) to the global \`${name.text}\`, which another declaration of the program already holds, so the checker binds its uses to that one and the calls through it cannot be read; make the file a module`);
+        return;
+      }
+      this.enqueue(symbol);
       return;
     }
     for (const element of name.elements) if (!ts.isOmittedExpression(element)) this.bind(element.name);
   }
 
-  private addEdge(call: ts.CallExpression | ts.NewExpression, form: "require" | "loader", kind: ts.SignatureKind): void {
+  /**
+   * The edge a loader call makes to what its first argument names, or one per pattern of a pattern
+   * loader's. A parented loader's specifier names a module as this one's would only when its parent
+   * URL is this module's own `import.meta.url`; against any other parent it is a computed edge.
+   */
+  private addEdges(call: ts.CallExpression | ts.NewExpression, form: "require" | "loader" | "parented" | "pattern" | "native"): void {
     const first = call.arguments?.at(0);
-    let found = targetOf(first);
-    if (first !== undefined && ts.isNewExpression(first) && kind === ts.SignatureKind.Construct) {
+    const source = call.getSourceFile();
+    const push = (spec: ts.Node, target: ImportTarget): void => {
+      const start = spec.getStart(source);
+      const resolved = target.kind === "static" ? this.built.resolvedModule(source.fileName, target.specifier) : null;
+      this.loads.get(source.fileName)?.edges.push({ target, form: form === "require" ? "require" : "loader", typeOnly: false, clause: { kind: "none" }, locals: [], resolved, line: source.getLineAndCharacterOfPosition(start).line + 1, start, end: spec.getEnd() });
+    };
+    if (form === "pattern") {
+      for (const [spec, target] of patternTargets(first)) push(spec ?? call, target);
+      return;
+    }
+    if (form === "native") {
+      push(call.arguments?.at(1) ?? call, { kind: "computed" });
+      return;
+    }
+    let found: ImportTarget = form === "parented" && !this.isOwnUrl(call.arguments?.at(1)) ? { kind: "computed" } : targetOf(first);
+    if (form !== "parented" && first !== undefined && ts.isNewExpression(first)) {
       const urlType = this.typeAt(first.expression);
       if (signatureDeclarations(this.checker, urlType, ts.SignatureKind.Construct).some((declaration) => this.reading.loaders.url.has(declaration))) found = targetOf(first.arguments?.at(0));
     }
-    const spec = first ?? call;
-    const source = call.getSourceFile();
-    const start = spec.getStart(source);
-    const resolved = found.kind === "static" ? this.built.resolvedModule(source.fileName, found.specifier) : null;
-    this.loads.get(source.fileName)?.edges.push({ target: found, form, typeOnly: false, clause: { kind: "none" }, locals: [], resolved, line: source.getLineAndCharacterOfPosition(start).line + 1, start, end: spec.getEnd() });
+    push(first ?? call, found);
+  }
+
+  /** Whether `argument` is `import.meta.url` read in place. */
+  private isOwnUrl(argument: ts.Expression | undefined): boolean {
+    const metaUrl = this.reading.loaders.metaUrl;
+    if (argument === undefined || metaUrl === undefined || !ts.isPropertyAccessExpression(argument) || !ts.isMetaProperty(argument.expression)) return false;
+    return this.checker.getSymbolAtLocation(argument.name) === metaUrl;
   }
 
   /** A call or `new` of `callee`, a loader value or a member read off one. */
@@ -561,7 +808,13 @@ class LoaderFlows {
     }
     const kind = ts.isNewExpression(call) ? ts.SignatureKind.Construct : ts.SignatureKind.Call;
     const form = loaderForm(this.checker, this.reading.loaders, calleeType, kind);
-    if (form !== null) this.addEdge(call, form, kind);
+    if (form === "evaluate" || (form === "loader" && this.runsAsCode(call, calleeType))) {
+      this.fail(call, "this call runs a string as code (eval, Function, node:vm, a Worker with `eval`), and that code may load any module, so what it loads cannot be read");
+      return;
+    }
+    if (form === "program") this.programRun(call);
+    else if (form !== null) this.addEdges(call, form);
+    if (form === "loader" && this.startsNodeWith(call, calleeType)) this.programRun(call);
     if (form === "require" && isAnyTyped(this.typeAt(call))) this.untypedRequire(call);
     // eslint-disable-next-line no-restricted-syntax -- policy default: a `new` with no argument list passes no callback
     for (const argument of call.arguments ?? []) {
@@ -626,11 +879,22 @@ class LoaderFlows {
       else this.fail(node, "a module loader (or a value that holds one) is cast to a type that holds no loader, so the calls made through it cannot be read");
     } else if (ts.isCallExpression(parent) || ts.isNewExpression(parent)) {
       if (parent.expression === node) this.called(parent, node);
+      else if (this.isWrappedRunner(parent, node)) this.flow(parent);
       else this.fail(node, "a module loader (or a value that holds one) is passed as an argument, so the modules the callee loads through it cannot be read; call it where it is");
     } else if (ts.isTaggedTemplateExpression(parent) && parent.tag === node) {
       this.fail(node, "a module loader (or a value that holds one) is called as a template tag, so the module it loads cannot be read; call it with a literal");
     } else if ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node) this.member(parent);
     else this.bound(parent, node);
+  }
+
+  /**
+   * Whether `node`, an argument of `call`, is a function that runs a program, and the checker types
+   * what `call` returns as one too (`promisify(execFile)`): the calls that run a program are then
+   * those of the result, followed from there.
+   */
+  private isWrappedRunner(call: ts.CallExpression | ts.NewExpression, node: ts.Expression): boolean {
+    const runs = (type: ts.Type): boolean => loaderForm(this.checker, this.reading.loaders, type, ts.SignatureKind.Call) === "program";
+    return ts.isCallExpression(call) && runs(this.typeAt(node)) && runs(this.typeAt(call));
   }
 
   /** `node`, a loader value, as an operand of `parent`: passed through a logical operator, assigned, or only read. */
@@ -694,6 +958,13 @@ class LoaderFlows {
   }
 }
 
+/** Whether `name` is bound by a top-level variable statement of a script, which makes it a global. */
+function isScriptGlobal(name: ts.Identifier): boolean {
+  let at: ts.Node = name.parent;
+  while (ts.isBindingElement(at) || ts.isObjectBindingPattern(at) || ts.isArrayBindingPattern(at) || ts.isVariableDeclaration(at) || ts.isVariableDeclarationList(at)) at = at.parent;
+  return ts.isVariableStatement(at) && ts.isSourceFile(at.parent) && !ts.isExternalModule(at.parent);
+}
+
 function followLoaders(built: ModuleProgram, reading: Held): Map<string, ModuleLoads> {
   return new LoaderFlows(built, reading).run();
 }
@@ -727,6 +998,33 @@ function targetOf(expression: ts.Expression | undefined): ImportTarget {
   if (ts.isStringLiteralLike(expression)) return { kind: "static", specifier: expression.text };
   if (ts.isTemplateExpression(expression)) return { kind: "template", prefix: expression.head.text };
   return { kind: "computed" };
+}
+
+/** A character that makes the rest of a glob a pattern rather than a path: a wildcard, a class, a brace or extglob group, an escape. */
+const GLOB_SYNTAX = /[*?[\]{}()!+@\\]/;
+
+/** The static prefix of a glob pattern: every module whose path begins with it may match. */
+function globPrefix(pattern: string): string {
+  const at = pattern.search(GLOB_SYNTAX);
+  return at === -1 ? pattern : pattern.slice(0, at);
+}
+
+/**
+ * What a pattern loader's argument names, each pattern with the node it is written as: a pattern or
+ * a list of patterns is a template edge to every module its static prefix begins, never a static
+ * one, since a pattern names no module whole; a negated pattern only narrows the others and names
+ * none; anything else is computed.
+ */
+function patternTargets(argument: ts.Expression | undefined): [ts.Node | undefined, ImportTarget][] {
+  const one = (pattern: ts.Expression): [ts.Node, ImportTarget][] => {
+    const text = ts.isStringLiteralLike(pattern) ? pattern.text : ts.isTemplateExpression(pattern) ? pattern.head.text : null;
+    if (text === null) return [[pattern, { kind: "computed" }]];
+    if (text.startsWith("!") && ts.isStringLiteralLike(pattern)) return [];
+    return [[pattern, { kind: "template", prefix: globPrefix(text) }]];
+  };
+  if (argument === undefined) return [[undefined, { kind: "computed" }]];
+  if (!ts.isArrayLiteralExpression(argument)) return one(argument);
+  return argument.elements.flatMap((element) => (ts.isSpreadElement(element) ? [[element, { kind: "computed" }] satisfies [ts.Node, ImportTarget]] : one(element)));
 }
 
 function clauseNames(elements: readonly (ts.ImportSpecifier | ts.ExportSpecifier)[]): ClauseName[] {

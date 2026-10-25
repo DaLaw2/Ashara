@@ -51,7 +51,7 @@ const StoredVisionSchema = z.strictObject({
   exclusions: z.unknown(),
 });
 
-/** A vision version as vision_documents stores it, its jsonb unread, as currentStoredVision reads it. */
+/** A vision version as vision_documents stores it, its jsonb unread, as currentStoredVision reads it; parseStoredVision holds it to StoredVisionSchema's output. */
 export interface StoredVision {
   readonly projectId: string;
   readonly version: number;
@@ -77,9 +77,17 @@ class StoredVisionUnreadable extends Error {
   }
 }
 
+/**
+ * `A` when the checker finds it identical to `B`, else never: a field either one adds, drops, or
+ * makes optional or readonly leaves nothing to assign, which mutual assignability misses for an
+ * optional field.
+ */
+type Exactly<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? A : never;
+
 /** Reads what currentStoredVision selected for the project; one that is absent or does not parse throws. */
 export function parseStoredVision(projectId: string, raw: unknown): StoredVision {
   const parsed = StoredVisionSchema.safeParse(raw);
   if (!parsed.success) throw new StoredVisionUnreadable(projectId, z.prettifyError(parsed.error));
-  return parsed.data;
+  const read: Exactly<Readonly<z.output<typeof StoredVisionSchema>>, StoredVision> = parsed.data;
+  return read;
 }

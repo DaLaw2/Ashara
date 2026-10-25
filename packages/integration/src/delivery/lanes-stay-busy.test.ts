@@ -24,8 +24,7 @@ const NAME = `lanes-stay-busy-test-${randomUUID().slice(0, 8)}`;
 const LONG_MS = 1_500;
 const SHORT_MS = 50;
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let root = "";
 
 /** How the fake agent's attempt at a task ends once its time is up. */

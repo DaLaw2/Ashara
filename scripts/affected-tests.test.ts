@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { boundSelection, parseNameStatus, repositorySources, selectTests, SIMULATOR_DIR, WHOLE_SUITE_RULES, type BoundedRun, type ChangedPath, type Selection, type SelectionSources } from "./affected-tests.js";
+import { isCheckoutSource } from "./module-program.js";
 
 const REPO = path.join(import.meta.dirname, "..");
 const SCRIPT = path.join(import.meta.dirname, "affected-tests.ts");
@@ -93,6 +94,38 @@ describe("the selected rules", () => {
     );
     expect(asked).toEqual(["packages/server/src/web-client.ts"]);
     expect(selection).toMatchObject({ kind: "selected", tests: ["packages/a/src/a.test.ts", "packages/integration/src/workplace/snap.test.ts"] });
+  });
+
+  test("a module is a source the checkout program holds as a root, a package's test/ module among them, so its change selects its graph dependants", async () => {
+    const asked: string[] = [];
+    const selection = await selectTests(
+      [modified("packages/a/test/fixture.ts"), modified("scripts/lints/tool.ts")],
+      stubSources({
+        testsImporting: (modules) => {
+          asked.push(...modules);
+          return Promise.resolve(["packages/a/src/a.test.ts"]);
+        },
+      }),
+    );
+    expect(selection).toMatchObject({ kind: "selected", tests: ["packages/a/src/a.test.ts"] });
+    expect(asked.sort()).toEqual(["packages/a/test/fixture.ts", "scripts/lints/tool.ts"]);
+    expect(isCheckoutSource("packages/a/test/fixture.ts")).toBe(true);
+    expect(isCheckoutSource("packages/server/web/app.js")).toBe(false);
+  });
+
+  test("a manifest or lockfile is told by npm's file names, a package-manager convention no module program answers: a lockfile beside a workspace selects the whole suite", async () => {
+    const selection = await selectTests([modified("tools/package-lock.json")], stubSources());
+    expect(selection).toMatchObject({ kind: "whole-suite", reasons: ["tools/package-lock.json: a lockfile other than the root's, which no workspace attribution reads"] });
+  });
+
+  test("a test file is told by the colocated *.test.ts convention vitest.config.mts includes, so a deleted one, which no program or test listing holds, still reads as a test that touches no source", async () => {
+    const selection = await selectTests([{ path: "packages/b/src/gone.test.ts", status: "deleted" }], stubSources());
+    expect(selection).toMatchObject({ kind: "selected", tests: [], touchesSource: false });
+  });
+
+  test("a snapshot is tied to its test by vitest's __snapshots__/<test>.snap layout, a runner convention no module program holds", async () => {
+    const selection = await selectTests([modified("packages/integration/src/workplace/__snapshots__/snap.test.ts.snap")], stubSources());
+    expect(selection).toMatchObject({ kind: "selected", tests: ["packages/integration/src/workplace/snap.test.ts"] });
   });
 
   test("a file the no-test-effect rules clear selects nothing", async () => {

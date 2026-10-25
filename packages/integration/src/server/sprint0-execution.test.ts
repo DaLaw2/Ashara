@@ -73,8 +73,7 @@ function toolCallTurn(toolName: string, input: unknown) {
 
 const memorySessions: SessionStore = { insert: async () => {}, complete: async () => {}, fail: async () => {} };
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let clientId = "";
 let projectId: ProjectId;
 let root = "";

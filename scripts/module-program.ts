@@ -9,7 +9,8 @@
  * when the root holds none (an in-memory tree), with `allowJs` so a .js or .mjs module is read
  * alike, and vitest's globals declared so a test that calls `vi` without importing it resolves.
  * A workspace specifier `@ashara/<pkg>[/<sub>]` resolves through the root's
- * packages/<pkg>/package.json exports, never through a linked copy elsewhere; any other bare
+ * packages/<pkg>/package.json exports, never through a linked copy elsewhere, and one whose subpath
+ * those exports lack resolves to none, its reason kept for the guard that reads it; any other bare
  * specifier the module's own directory cannot resolve resolves from this checkout, whose
  * node_modules holds the types the checker needs.
  */
@@ -55,6 +56,8 @@ export interface ModuleProgram {
    * when it names neither.
    */
   moduleSymbol(file: string, specifier: string): ts.Symbol | undefined;
+  /** Why the workspace specifier `specifier` resolves to none: its package's manifest under the root exports no such subpath; null for any other specifier. */
+  workspaceGap(specifier: string): string | null;
 }
 
 function compilerOptionsOf(root: string): ts.CompilerOptions {
@@ -78,12 +81,19 @@ function manifestExports(manifestPath: string): Readonly<Record<string, string>>
   return manifest.data.exports;
 }
 
-/** Each workspace specifier resolved through its package's manifest under `root`; null for any other specifier, or a package `root` does not hold. */
-function workspaceResolver(root: string): (specifier: string) => string | null {
+/**
+ * What a specifier is to the root's workspace packages: `outside` when it names none `root` holds
+ * (any other specifier, or a package the root does not hold), the file its package's manifest exports
+ * for it, or `unexported` when that manifest exports no such subpath.
+ */
+type WorkspaceResolution = { readonly kind: "outside" } | { readonly kind: "file"; readonly file: string } | { readonly kind: "unexported"; readonly reason: string };
+
+/** Each specifier resolved through its workspace package's manifest under `root`. */
+function workspaceResolver(root: string): (specifier: string) => WorkspaceResolution {
   const exportsByPackage = new Map<string, Readonly<Record<string, string>> | null>();
   return (specifier) => {
     const match = WORKSPACE_SPECIFIER.exec(specifier);
-    if (match === null) return null;
+    if (match === null) return { kind: "outside" };
     const [, pkg, subpath] = match;
     let exportsMap = exportsByPackage.get(pkg);
     if (exportsMap === undefined) {
@@ -91,9 +101,11 @@ function workspaceResolver(root: string): (specifier: string) => string | null {
       exportsMap = fs.existsSync(manifestPath) ? manifestExports(manifestPath) : null;
       exportsByPackage.set(pkg, exportsMap);
     }
-    if (exportsMap === null) return null;
-    const target = exportsMap[subpath === undefined ? "." : `.${subpath}`];
-    return target === undefined ? null : path.join(root, "packages", pkg, target);
+    if (exportsMap === null) return { kind: "outside" };
+    const entry = subpath === undefined ? "." : `.${subpath}`;
+    const target = exportsMap[entry];
+    if (target === undefined) return { kind: "unexported", reason: `packages/${pkg}/package.json exports no "${entry}" subpath` };
+    return { kind: "file", file: path.join(root, "packages", pkg, target) };
   };
 }
 
@@ -109,7 +121,7 @@ function scriptKindOf(fileName: string): ts.ScriptKind {
   return ts.ScriptKind.TS;
 }
 
-function build(root: string, texts: ReadonlyMap<string, string>): ModuleProgram {
+function build(root: string, texts: ReadonlyMap<string, string>, oldProgram?: ts.Program): ModuleProgram {
   const options = compilerOptionsOf(root);
   const base = ts.createCompilerHost(options, true);
   const resolveWorkspace = workspaceResolver(root);
@@ -118,10 +130,9 @@ function build(root: string, texts: ReadonlyMap<string, string>): ModuleProgram 
   for (const file of texts.keys()) for (let dir = path.dirname(file); !textDirectories.has(dir) && dir !== path.dirname(dir); dir = path.dirname(dir)) textDirectories.add(dir);
   const resolutionCache =ts.createModuleResolutionCache(CHECKOUT, (fileName) => base.getCanonicalFileName(fileName), options);
   const resolveOne = (specifier: string, containingFile: string): ts.ResolvedModuleWithFailedLookupLocations => {
-    const workspaceFile = resolveWorkspace(specifier);
-    if (workspaceFile !== null) {
-      return { resolvedModule: { resolvedFileName: workspaceFile, extension: ts.Extension.Ts, isExternalLibraryImport: false } };
-    }
+    const workspace = resolveWorkspace(specifier);
+    if (workspace.kind === "file") return { resolvedModule: { resolvedFileName: workspace.file, extension: ts.Extension.Ts, isExternalLibraryImport: false } };
+    if (workspace.kind === "unexported") return { resolvedModule: undefined };
     const fromHere = ts.resolveModuleName(specifier, containingFile, options, host, resolutionCache);
     const isBare = !specifier.startsWith(".") && !path.isAbsolute(specifier);
     if (fromHere.resolvedModule !== undefined || !isBare) return fromHere;
@@ -135,6 +146,8 @@ function build(root: string, texts: ReadonlyMap<string, string>): ModuleProgram 
     readFile: (fileName) => texts.get(fileName) ?? base.readFile(fileName),
     getSourceFile: (fileName, languageVersion, onError) => {
       const text = texts.get(fileName);
+      const old = oldProgram?.getSourceFile(fileName);
+      if (text !== undefined && old !== undefined && old.text === text) return old;
       if (text !== undefined) return ts.createSourceFile(fileName, text, languageVersion, true, scriptKindOf(fileName));
       const diskText = base.readFile(fileName);
       if (diskText === undefined) return undefined;
@@ -157,7 +170,7 @@ function build(root: string, texts: ReadonlyMap<string, string>): ModuleProgram 
     },
   };
   const files = [...texts.keys()];
-  const program = ts.createProgram({ rootNames: files, options, host });
+  const program = ts.createProgram({ rootNames: files, options, host, oldProgram });
   /** The file `specifier`, written in `file`, resolves to: as the compiler resolved it for the program, or resolved now for a specifier only a loader call names. */
   const resolvedModule = (file: string, specifier: string): string | null => {
     let own = resolutions.get(file);
@@ -179,6 +192,10 @@ function build(root: string, texts: ReadonlyMap<string, string>): ModuleProgram 
     files,
     sourceFile: (file) => (texts.has(file) ? program.getSourceFile(file) : undefined),
     resolvedModule,
+    workspaceGap: (specifier) => {
+      const workspace = resolveWorkspace(specifier);
+      return workspace.kind === "unexported" ? workspace.reason : null;
+    },
     moduleSymbol: (file, specifier) => {
       const ambient = checker.getAmbientModules().find((module) => module.name === JSON.stringify(specifier));
       if (ambient !== undefined) return ambient;
@@ -229,6 +246,22 @@ export function moduleProgram(root: string, texts: ReadonlyMap<string, string>):
   return keptOrBuilt(pool, pool === singles ? KEPT_SINGLES : KEPT_PROGRAMS, contentKey(root, absolute), () => build(root, absolute));
 }
 
+/**
+ * A program over `built`'s texts with `overrides` in place of (or beside) them, its unchanged files
+ * reused from `built`: for a guard that asks the checker about a type it writes beside the source, as
+ * an instantiation of two declarations over one set of type parameters. Built on each call, never kept.
+ */
+export function overriddenProgram(built: ModuleProgram, overrides: ReadonlyMap<string, string>): ModuleProgram {
+  const texts = new Map<string, string>();
+  for (const file of built.files) {
+    const source = built.sourceFile(file);
+    if (source === undefined) throw new ModuleProgramError(file, "a text of the program has no source file");
+    texts.set(file, source.text);
+  }
+  for (const [file, text] of overrides) texts.set(path.resolve(file), text);
+  return build(built.root, texts, built.program);
+}
+
 /** The program over `texts`, with this checkout's options and workspace packages. */
 export function checkoutProgram(texts: ReadonlyMap<string, string>): ModuleProgram {
   return moduleProgram(CHECKOUT, texts);
@@ -241,21 +274,37 @@ export function forgetPrograms(): void {
   diskSources.clear();
 }
 
-function tsFilesUnder(dir: string): string[] {
+/** The directories under each package whose modules are the checkout's sources. */
+const PACKAGE_SOURCE_DIRS: readonly string[] = ["src", "test"];
+
+/**
+ * Whether `relative` (root-relative, `/`-separated) is a source of a checkout: a .ts module under a
+ * package's src/ or test/, or under scripts/, outside node_modules. The checkout program's roots are
+ * exactly these files, so a guard asking whether a path is a module the program reads asks this.
+ */
+export function isCheckoutSource(relative: string): boolean {
+  const parts = relative.split("/");
+  if (!relative.endsWith(".ts") || parts.includes("node_modules")) return false;
+  if (parts[0] === "scripts") return parts.length >= 2;
+  return parts[0] === "packages" && parts.length >= 4 && PACKAGE_SOURCE_DIRS.includes(parts[2]);
+}
+
+function filesUnder(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) return entry.name === "node_modules" ? [] : tsFilesUnder(full);
-    return entry.isFile() && entry.name.endsWith(".ts") ? [full] : [];
+    if (entry.isDirectory()) return filesUnder(full);
+    return entry.isFile() ? [full] : [];
   });
 }
 
-/** Every .ts module of `root`'s sources, each path to its text on disk: each package's src/ and test/, and scripts/. */
+/** Every source module of `root` (isCheckoutSource), each path to its text on disk. */
 function sourceTexts(root: string): Map<string, string> {
   const packagesDir = path.join(root, "packages");
   const packages = fs.existsSync(packagesDir) ? fs.readdirSync(packagesDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()) : [];
-  const dirs = [...packages.flatMap((entry) => ["src", "test"].map((dir) => path.join(packagesDir, entry.name, dir))), path.join(root, "scripts")];
-  return new Map(dirs.flatMap(tsFilesUnder).map((file): [string, string] => [file, fs.readFileSync(file, "utf-8")]));
+  const dirs = [...packages.flatMap((entry) => PACKAGE_SOURCE_DIRS.map((dir) => path.join(packagesDir, entry.name, dir))), path.join(root, "scripts")];
+  const sources = dirs.flatMap(filesUnder).filter((file) => isCheckoutSource(path.relative(root, file).split(path.sep).join("/")));
+  return new Map(sources.map((file): [string, string] => [file, fs.readFileSync(file, "utf-8")]));
 }
 
 /**

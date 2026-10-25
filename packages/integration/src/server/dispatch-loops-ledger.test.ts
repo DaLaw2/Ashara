@@ -56,8 +56,7 @@ const MODEL: ModelConfig = {
   priceWindows: [], priceTiers: [], datedPrices: [],
 };
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let root = "";
 const run = promisify(execFile);
 

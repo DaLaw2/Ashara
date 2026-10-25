@@ -69,8 +69,7 @@ function toolCallTurn(toolName: string, input: unknown): LanguageModelV4Generate
 /** One model turn: a fixed reply, or one produced when the turn comes (after whatever it does first). */
 type Turn = LanguageModelV4GenerateResult | (() => Promise<LanguageModelV4GenerateResult>);
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let clientId = "";
 let projectId: ProjectId;
 let root = "";

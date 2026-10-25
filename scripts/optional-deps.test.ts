@@ -81,4 +81,37 @@ describe("findUnsuppliedOptionalMembers", () => {
       ["ServiceDeps", "viaConstructor", 0],
     ]);
   });
+
+  test("a value import of a workspace subpath its package does not export fails the scan, never a skip that passes what it would supply", () => {
+    const entry = `import { service } from "./supplied.js";\nimport { more } from "@ashara/a/unexported";\nexport const both = [service, more];\n`;
+    const texts = new Map(MODULES.map((file) => [path.join(root, file), fs.readFileSync(path.join(root, file), "utf-8")]));
+    texts.set(path.join(root, "packages/server/src/supplied.ts"), ENTRY_MODULE);
+    texts.set(path.join(root, "packages/server/src/index.ts"), entry);
+    const program = moduleProgram(root, texts);
+    expect(() => findUnsuppliedOptionalMembers({ program, root, entry: "packages/server/src/index.ts", allowlist: [] })).toThrow(
+      /^optional-deps scan: packages\/server\/src\/index\.ts:2: "@ashara\/a\/unexported" resolves to no module: packages\/a\/package\.json exports no "\.\/unexported" subpath$/,
+    );
+  });
+
+  test("a dependency type is told by its Deps, Port or Config name, Discipline D's naming contract, which no checker fact states: an optional member of another type is not scanned", () => {
+    const texts = new Map(MODULES.map((file) => [path.join(root, file), fs.readFileSync(path.join(root, file), "utf-8")]));
+    texts.set(path.join(root, "packages/a/src/deps.ts"), `${DEPS_MODULE}\nexport interface ServiceOptions { readonly unscanned?: number }\nexport type ServiceSettings = { readonly unscanned?: number };\n`);
+    const program = moduleProgram(root, texts);
+    const found = findUnsuppliedOptionalMembers({ program, root, entry: "packages/server/src/index.ts", allowlist: [] }).map((f) => f.declaration);
+    expect(found).toEqual(["ServiceDeps", "AliasConfig"]);
+  });
+
+  test("a value load whose target is a template or computed fails the scan, since it may reach a supplier; a program the module runs supplies nothing to it", () => {
+    const run = (entry: string): (() => unknown) => {
+      const texts = new Map(MODULES.map((file) => [path.join(root, file), fs.readFileSync(path.join(root, file), "utf-8")]));
+      texts.set(path.join(root, "packages/server/src/supplied.ts"), ENTRY_MODULE);
+      texts.set(path.join(root, "packages/server/src/index.ts"), entry);
+      const program = moduleProgram(root, texts);
+      return () => findUnsuppliedOptionalMembers({ program, root, entry: "packages/server/src/index.ts", allowlist: [] });
+    };
+    const head = 'import { service } from "./supplied.js";\nexport const kept = service;\n';
+    expect(run(`${head}export const more = (pkg: string) => import(\`@ashara/\${pkg}\`);\n`)).toThrow(/index\.ts:3: a value load whose target begins `@ashara\/` may reach any module/);
+    expect(run(`${head}export const more = (pkg: string) => import(pkg);\n`)).toThrow(/index\.ts:3: a value load whose target is computed may reach any module/);
+    expect(run(`import { spawnSync } from "node:child_process";\n${head}export const ran = (file: string) => spawnSync(process.execPath, [file]);\n`)()).toEqual(expect.any(Array));
+  });
 });

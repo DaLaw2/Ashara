@@ -1,9 +1,10 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { projects } from "@ashara/db";
-import type { DbHandle, PROJECT_LIFECYCLES } from "@ashara/db";
+import type { DbHandle } from "@ashara/db";
 import { projectHalted } from "@ashara/delivery/predicates";
 import type { ProjectId } from "@ashara/shared";
+import type { ProjectLifecycle } from "./inbound-policy.js";
 import type { AcceptProject, EndHaltOnStop } from "./ports.js";
 import { projectAtWork } from "./predicates.js";
 
@@ -12,8 +13,6 @@ import { projectAtWork } from "./predicates.js";
  * projects_lifecycle_known), or 'blocked' while Delivery's halt is open.
  */
 export const PROJECT_STATUSES = ["active", "blocked", "stopped", "accepted"] as const;
-
-type ProjectLifecycle = (typeof PROJECT_LIFECYCLES)[number];
 
 /**
  * Engagement's one guard over projects.lifecycle, the column's

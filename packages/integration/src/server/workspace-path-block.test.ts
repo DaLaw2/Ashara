@@ -30,8 +30,7 @@ vi.mock("@ai-sdk/deepseek", () => ({ createDeepSeek: () => () => stub.model }));
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NAME = `workspace-path-block-test-${randomUUID().slice(0, 8)}`;
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let root = "";
 
 beforeAll(async () => {

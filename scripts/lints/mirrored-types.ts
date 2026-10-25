@@ -4,11 +4,13 @@
  * identity, never by the text a declaration is written in:
  * - one name: two module-level type declarations (interface or type alias) of packages' production
  *   src/ that share a name;
- * - one type: two module-level type declarations of production source, a package's src/ or
- *   scripts/, in one file or in two, under one name or different names, whose declared types the
- *   checker finds assignable each to the other over one set of at least MIN_MEMBERS property names.
- *   A copy drifts from its original as silently under another name as under the same one, and an
- *   alias that names another declaration whole is one;
+ * - one type: two module-level type declarations of a package's src/ or of scripts/, tests among
+ *   them, in one file or in two, under one name or different names, whose declared types the checker
+ *   finds assignable each to the other: object types over one set of at least MIN_MEMBERS property
+ *   names, unions of at least MIN_MEMBERS members or with an object member, and generic declarations
+ *   of one arity instantiated over one set of fresh type parameters. A copy drifts from its original
+ *   as silently under another name as under the same one, and an alias that names another
+ *   declaration whole is one;
  * - a joined type (joined-types.ts): a type of production source the checker finds one with what a
  *   function of another module returns, written over that function's type. The violation names the
  *   type that module exports assignable each way to the joined one, or says it exports none.
@@ -21,174 +23,109 @@
 
 import path from "node:path";
 import ts from "typescript";
-import type { ModuleProgram } from "../module-program.js";
+import { overriddenProgram, type ModuleProgram } from "../module-program.js";
 import { MIRRORED_TYPES, lineOf, returnTypeViolations, sameType, type ProductionModule } from "./joined-types.js";
 import { contextProgram, type LintContext, type Violation } from "./lint.js";
+import { MIRRORED_ALLOWED, type AllowedPair } from "./mirrored-allowed.js";
 
 const MIN_MEMBERS = 3;
 
-interface AllowedPair {
-  /** The declared names: one for a shared name, each for a shared type. */
-  readonly names: readonly string[];
-  /** Root-relative, `/`-separated: every file that declares one of `names`. */
-  readonly files: readonly string[];
-  readonly reason: string;
-}
-
-const SIMULATOR_ROW = "the simulator's own zod row of what it reads back from the database to judge a run: it states what the run must show, so it is never imported from the code it judges";
-const DERIVED_ALIAS = "a local alias derived from the production type by a type operator (its parameters, an indexed access), so it is that type and cannot drift from it; the production module exports no name for it";
-
-const MIRRORED_ALLOWED: readonly AllowedPair[] = [
-  { names: ["ProjectRow"], files: ["packages/db/src/repositories/project.ts", "packages/integration/src/simulator/invariants.ts"], reason: SIMULATOR_ROW },
-  { names: ["BurnWarning"], files: ["packages/engagement/src/burn-warning.ts", "packages/integration/src/simulator/client-report-burn.ts"], reason: SIMULATOR_ROW },
-  { names: ["StoredGuarantee"], files: ["packages/engagement/src/vision-language/guarantee.ts", "packages/integration/src/simulator/stand-ins/liaison.ts"], reason: SIMULATOR_ROW },
-  {
-    names: ["IntakeRecords"],
-    files: ["packages/engagement/src/intake.ts", "packages/integration/src/simulator/intake-readings.ts"],
-    reason: "Engagement's is what an intake asked and inferred; the simulator's is what it reads back of a tender's reading (its questions posted, its vision written)",
-  },
-  {
-    names: ["TableSource"],
-    files: ["packages/engagement/src/guarantee-report.ts", "packages/integration/src/simulator/client-report-core.ts"],
-    reason: "Engagement's names the record a terminal message's table is read from; the simulator's is the sweep, vision version and commit it reads back for a report's table",
-  },
-  {
-    names: ["CorrectionReading"],
-    files: ["packages/engagement/src/correction.ts", "packages/integration/src/simulator/stand-ins/liaison.ts"],
-    reason: "Engagement's is the model's reading of a correction; the stand-in's is its own answer, read or fallen back to an exclusion",
-  },
-  {
-    names: ["Risk"],
-    files: ["packages/engagement/src/early-warning.ts", "packages/integration/src/server/terminal-reports.ts"],
-    reason: "Engagement's is why one guarantee is at risk; the test harness's names the risk register a halted terminal event carries, derived from Engagement's own type",
-  },
-  {
-    names: ["TaskLanes"],
-    files: ["packages/delivery/src/types.ts", "packages/integration/src/simulator/interleave.ts"],
-    reason: `${DERIVED_ALIAS}; a simulator file imports from another package only the names its rules list`,
-  },
-  { names: ["TerminalEvent"], files: ["packages/engagement/src/terminal-report.ts", "packages/integration/src/server/terminal-reports.ts"], reason: DERIVED_ALIAS },
-  {
-    names: ["Direction"],
-    files: ["packages/engagement/src/vision-language/contract-op.ts", "packages/integration/src/simulator/tape.ts"],
-    reason: "Engagement's is which way a contract revision moves a guarantee; the simulator's is a draw its tape takes",
-  },
-  {
-    names: ["Coverage"],
-    files: ["packages/integration/src/simulator/coverage.ts", "packages/quality/src/guarantee-verdict.ts"],
-    reason: "Quality's is whether a sweep covers the contract in force; the simulator's is what a batch of runs reached",
-  },
-  {
-    names: ["Outcome"],
-    files: ["packages/integration/src/simulator/invariants.ts", "packages/quality/src/repositories/reviewer-outcome.ts", "packages/workplace/src/outcome.ts"],
-    reason: "Workplace's is how an attempt ended, Quality's how a reviewer's verdict was borne out, the simulator's what a run ended in",
-  },
-  {
-    names: ["WorkKind"],
-    files: ["packages/integration/src/simulator/stand-ins/agent.ts", "packages/organization/src/work-kind.ts"],
-    reason: "Organization's is the kind of work a role is assigned; the stand-in's is the scope of an attempt's scripted draws, which tells the scaffold apart",
-  },
-  {
-    names: ["TaskSpec"],
-    files: ["packages/delivery/src/decomposition-types.ts", "packages/workplace/src/task-spec.ts"],
-    reason: "Delivery's is a planned task's specification with its origin and sources; Workplace's is the goal, end state, scope and deliverables a brief states",
-  },
-  {
-    names: ["ReplanContext"],
-    files: ["packages/delivery/src/domain/work-item.ts", "packages/workplace/src/replan-context.ts"],
-    reason: "Delivery's is the replan context it writes on a blocked reason; Workplace's is its own zod read, at its boundary, of the part its brief shows, and Workplace may not import Delivery, which is downstream of it",
-  },
-  {
-    names: ["RevisionCause"],
-    files: ["packages/delivery/src/replan-port.ts", "packages/engagement/src/vision-language/contract-op.ts"],
-    reason: "Delivery's is what asked for a plan revision; Engagement's is why a vision revision was written",
-  },
-  {
-    names: ["JudgedGuarantee"],
-    files: ["packages/evaluation/src/hidden-verdict.ts", "packages/quality/src/guarantee-verdict.ts"],
-    reason: "Quality's is what its verdict reads of a guarantee; Evaluation's is the hidden suite's verdict on one",
-  },
-  {
-    names: ["Spend"],
-    files: ["packages/evaluation/src/run-report-format.ts", "packages/finance/src/llm-call-repository.ts"],
-    reason: "Finance's is a scope's spend as its cap counts it; the run report's is measured spend over a set of calls",
-  },
-  {
-    names: ["Cell"],
-    files: ["packages/evaluation/src/trust-stats.ts", "packages/execution-infra/src/podman.ts"],
-    reason: "Execution Infrastructure's is a container; the trust statistics' is one cell of a confusion table",
-  },
-  {
-    names: ["Delivery"],
-    files: ["packages/evaluation/src/trust-stats.ts", "packages/quality/src/dispatch-result.ts"],
-    reason: "Quality's is what a completed task delivered; the trust statistics' counts how one arm's runs per stack ended",
-  },
-  {
-    names: ["JsonValue"],
-    files: ["packages/quality/src/dispatch-result.ts", "packages/shared/src/error-chain.ts"],
-    reason: "the shared kernel's is plain JSON data; Quality's event fields also admit an undefined member, which JSON.stringify drops",
-  },
-  {
-    names: ["NewSuiteReviewFindings", "SuiteReviewFindingsEntry"],
-    files: ["packages/delivery/src/types.ts", "packages/quality/src/repositories/suite-review.ts"],
-    reason: "Delivery's port states what its suite-review step records; Quality's repository is what fills it, and neither context may import the other's module outside its ACL",
-  },
-  {
-    names: ["RunBudgetFinding", "VerificationSplitBreak"],
-    files: ["scripts/simulator-run-budget.ts", "scripts/verification-split.ts"],
-    reason: "each check's own finding: they hold a file, a line and a reason today, and a field one check comes to need must not reach the other",
-  },
-];
-
-/** One module-level type declaration of production source. */
+/** One module-level type declaration of a scanned module. */
 interface TypeDeclaration {
   readonly name: string;
   /** Root-relative, `/`-separated. */
   readonly file: string;
+  readonly absolute: string;
   readonly line: number;
   /** A package's src/ rather than scripts/: the one-name rule reads only these. */
   readonly inPackage: boolean;
-  /** The declared type, and its property names sorted; null when it is no object type of at least MIN_MEMBERS properties. */
-  readonly shape: { readonly type: ts.Type; readonly key: string } | null;
+  /** A test module's: only the one-type rule reads these. */
+  readonly test: boolean;
+  /** The declared type, how many type parameters it takes, and a key two copies share; null when it is no type a copy is read of. */
+  readonly shape: { readonly type: ts.Type; readonly arity: number; readonly key: string } | null;
 }
 
-function isProduction(relative: string): boolean {
-  return !relative.endsWith(".test.ts") && !relative.endsWith(".d.ts");
+/** A module the lint scans: its absolute and root-relative paths, whether it is a package's, and whether it is a test. */
+interface ScannedModule extends ProductionModule {
+  readonly test: boolean;
 }
 
-function productionModules(context: LintContext, built: ModuleProgram): ProductionModule[] {
-  const modules: ProductionModule[] = [];
+/** The modules of a package's src/ and of scripts/, tests among them; declaration files are none. */
+function scannedModules(context: LintContext, built: ModuleProgram): ScannedModule[] {
+  const modules: ScannedModule[] = [];
   for (const pkg of context.packages) {
     for (const filePath of pkg.contents.keys()) {
       const relative = pkg.relativeTo(filePath);
-      if (relative.startsWith("src/") && isProduction(relative)) modules.push({ absolute: filePath, file: `packages/${pkg.name}/${relative}`, inPackage: true });
+      if (relative.startsWith("src/") && !relative.endsWith(".d.ts")) modules.push({ absolute: filePath, file: `packages/${pkg.name}/${relative}`, inPackage: true, test: relative.endsWith(".test.ts") });
     }
   }
   const scriptsDir = path.join(context.root, "scripts") + path.sep;
   for (const absolute of built.files) {
     const file = path.relative(context.root, absolute).split(path.sep).join("/");
-    if (absolute.startsWith(scriptsDir) && isProduction(file)) modules.push({ absolute, file, inPackage: false });
+    if (absolute.startsWith(scriptsDir) && !file.endsWith(".d.ts")) modules.push({ absolute, file, inPackage: false, test: file.endsWith(".test.ts") });
   }
   return modules;
 }
 
+function isObjectType(type: ts.Type): boolean {
+  return (type.flags & ts.TypeFlags.Object) !== 0;
+}
+
+/**
+ * The declared type of `declaration` and the key two copies of it share: its type parameters' count
+ * and, for a union of at least MIN_MEMBERS members or with an object member, its members' count, or,
+ * for an object type, its property names, of at least MIN_MEMBERS; null for any other type.
+ */
 function shapeOf(checker: ts.TypeChecker, declaration: ts.InterfaceDeclaration | ts.TypeAliasDeclaration): TypeDeclaration["shape"] {
   const symbol = checker.getSymbolAtLocation(declaration.name);
   if (symbol === undefined) return null;
   const type = checker.getDeclaredTypeOfSymbol(symbol);
-  if (type.isUnion() || (type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) === 0 || checker.isArrayLikeType(type)) return null;
+  const arity = declaration.typeParameters === undefined ? 0 : declaration.typeParameters.length;
+  if (type.isUnion()) {
+    if (type.types.length < MIN_MEMBERS && !type.types.some(isObjectType)) return null;
+    return { type, arity, key: `${String(arity)}\0union\0${String(type.types.length)}` };
+  }
+  if ((type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) === 0 || checker.isArrayLikeType(type)) return null;
   const names = checker.getPropertiesOfType(type).map((property) => property.name);
   if (names.length < MIN_MEMBERS) return null;
-  return { type, key: names.sort().join("\n") };
+  return { type, arity, key: `${String(arity)}\0${names.sort().join("\n")}` };
 }
 
-function typeDeclarations(built: ModuleProgram, modules: readonly ProductionModule[]): TypeDeclaration[] {
+/**
+ * Whether a type alias is derived by a type operator from a type declared or inferred elsewhere: an
+ * indexed access, a `typeof` query, a generic instantiation (`Parameters<...>`, `Extract<...>`), a
+ * conditional or mapped type; not one written as its own structure, nor one that names another
+ * declaration whole.
+ */
+function isDerived(declaration: ts.InterfaceDeclaration | ts.TypeAliasDeclaration): boolean {
+  if (!ts.isTypeAliasDeclaration(declaration)) return false;
+  const node = declaration.type;
+  if (ts.isTypeReferenceNode(node)) return node.typeArguments !== undefined;
+  return ts.isIndexedAccessTypeNode(node) || ts.isTypeQueryNode(node) || ts.isConditionalTypeNode(node) || ts.isMappedTypeNode(node) || (ts.isTypeOperatorNode(node) && node.operator === ts.SyntaxKind.KeyOfKeyword);
+}
+
+/**
+ * The module-level type declarations of `modules`. A test's alias derived by a type operator is none:
+ * it is how a test names a type its module under test takes or returns without exporting it, and it
+ * is that type by construction; a test's type written as its own structure, or one naming another
+ * declaration whole, is read like any other.
+ */
+function typeDeclarations(built: ModuleProgram, modules: readonly ScannedModule[]): TypeDeclaration[] {
   return modules.flatMap((module) => {
     const source = built.sourceFile(module.absolute);
     if (source === undefined) return [];
     return source.statements
       .filter((statement) => ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement))
-      .map((declaration) => ({ name: declaration.name.text, file: module.file, line: lineOf(declaration), inPackage: module.inPackage, shape: shapeOf(built.checker, declaration) }));
+      .filter((declaration) => !module.test || !isDerived(declaration))
+      .map((declaration) => ({
+        name: declaration.name.text,
+        file: module.file,
+        absolute: module.absolute,
+        line: lineOf(declaration),
+        inPackage: module.inPackage,
+        test: module.test,
+        shape: shapeOf(built.checker, declaration),
+      }));
   });
 }
 
@@ -209,12 +146,59 @@ function byName(declarations: readonly TypeDeclaration[]): TypeDeclaration[][] {
   return [...groups.values()].filter((group) => group.length > 1);
 }
 
+function isTypeReference(type: ts.Type): type is ts.TypeReference {
+  return "objectFlags" in type && typeof type.objectFlags === "number" && (type.objectFlags & ts.ObjectFlags.Reference) !== 0;
+}
+
+/** The prefix of the names a probe of two generic declarations writes beside the source. */
+const PROBE = "__mirroredTypesProbe";
+
 /**
- * Groups of two or more declarations whose declared types are one: one property set, each assignable
- * to the other, under one name or several. A group of one name all in packages is the one-name rule's
- * already, so it is left to that rule.
+ * Whether the checker finds each pair of generic declarations one type when both are instantiated
+ * over one set of fresh type parameters: a program beside `built` declares, for each pair, a tuple
+ * alias over fresh parameters in A's module whose two members are A and B instantiated over them (B
+ * exported from its own module under a probe name when it is elsewhere), and compares the two.
  */
-function byType(checker: ts.TypeChecker, declarations: readonly TypeDeclaration[]): TypeDeclaration[][] {
+function genericPairsAlike(built: ModuleProgram, pairs: readonly (readonly [TypeDeclaration, TypeDeclaration])[]): boolean[] {
+  if (pairs.length === 0) return [];
+  const appended = new Map<string, string>();
+  const append = (file: string, text: string): void => {
+    const known = appended.get(file);
+    appended.set(file, known === undefined ? text : known + text);
+  };
+  pairs.forEach(([a, b], i) => {
+    const params = Array.from({ length: a.shape === null ? 0 : a.shape.arity }, (_, k) => `P${String(k)}`).join(", ");
+    let other = b.name;
+    if (b.absolute !== a.absolute) {
+      append(b.absolute, `\nexport type { ${b.name} as ${PROBE}${String(i)}B };\n`);
+      other = `import(${JSON.stringify(b.absolute.replace(/\.ts$/, ".js"))}).${PROBE}${String(i)}B`;
+    }
+    append(a.absolute, `\ntype ${PROBE}${String(i)}<${params}> = [${a.name}<${params}>, ${other}<${params}>];\n`);
+  });
+  const overrides = new Map<string, string>();
+  for (const [file, extra] of appended) {
+    const source = built.sourceFile(file);
+    if (source !== undefined) overrides.set(file, source.text + extra);
+  }
+  const probe = overriddenProgram(built, overrides);
+  const checker = probe.checker;
+  return pairs.map(([a], i) => {
+    const alias = probe.sourceFile(a.absolute)?.statements.find((statement): statement is ts.TypeAliasDeclaration => ts.isTypeAliasDeclaration(statement) && statement.name.text === `${PROBE}${String(i)}`);
+    const symbol = alias === undefined ? undefined : checker.getSymbolAtLocation(alias.name);
+    const tuple = symbol === undefined ? undefined : checker.getDeclaredTypeOfSymbol(symbol);
+    if (tuple === undefined || !isTypeReference(tuple)) return false;
+    const [left, right] = checker.getTypeArguments(tuple);
+    return left !== undefined && right !== undefined && sameType(checker, left, right);
+  });
+}
+
+/**
+ * Groups of two or more declarations whose declared types are one: one key, each assignable to the
+ * other (a generic pair instantiated over one set of type parameters), under one name or several. A
+ * group of one name all in packages' production source is the one-name rule's already, so it is left
+ * to that rule.
+ */
+function byType(built: ModuleProgram, declarations: readonly TypeDeclaration[]): TypeDeclaration[][] {
   const byKey = new Map<string, TypeDeclaration[]>();
   for (const declaration of declarations) {
     if (declaration.shape === null) continue;
@@ -222,14 +206,26 @@ function byType(checker: ts.TypeChecker, declarations: readonly TypeDeclaration[
     if (known === undefined) byKey.set(declaration.shape.key, [declaration]);
     else known.push(declaration);
   }
+  const genericPairs: (readonly [TypeDeclaration, TypeDeclaration])[] = [];
+  for (const candidates of byKey.values()) {
+    for (const [i, first] of candidates.entries()) {
+      if (first.shape !== null && first.shape.arity > 0) for (const other of candidates.slice(i + 1)) genericPairs.push([first, other]);
+    }
+  }
+  const alike = genericPairsAlike(built, genericPairs);
+  const genericAlike = (a: TypeDeclaration, b: TypeDeclaration): boolean => genericPairs.some(([x, y], i) => alike[i] === true && ((x === a && y === b) || (x === b && y === a)));
+  const same = (a: TypeDeclaration, b: TypeDeclaration): boolean => {
+    if (a.shape === null || b.shape === null) return false;
+    return a.shape.arity > 0 ? genericAlike(a, b) : sameType(built.checker, a.shape.type, b.shape.type);
+  };
   const groups: TypeDeclaration[][] = [];
   for (const candidates of byKey.values()) {
     const left = [...candidates];
     while (left.length > 0) {
       const [first, ...rest] = left;
-      const group = [first, ...rest.filter((other) => first.shape !== null && other.shape !== null && sameType(checker, first.shape.type, other.shape.type))];
+      const group = [first, ...rest.filter((other) => same(first, other))];
       left.splice(0, left.length, ...rest.filter((other) => !group.includes(other)));
-      const oneNameInPackages = new Set(group.map((d) => d.name)).size === 1 && group.every((d) => d.inPackage);
+      const oneNameInPackages = new Set(group.map((d) => d.name)).size === 1 && group.every((d) => d.inPackage && !d.test);
       if (group.length > 1 && !oneNameInPackages) groups.push(group);
     }
   }
@@ -246,10 +242,10 @@ function where(group: readonly TypeDeclaration[]): string {
  */
 export function mirroredTypes(context: LintContext, allowed: readonly AllowedPair[]): Violation[] {
   const built = contextProgram(context);
-  const modules = productionModules(context, built);
+  const modules = scannedModules(context, built);
   const declarations = typeDeclarations(built, modules);
   const violations: Violation[] = [];
-  if (!declarations.some((d) => d.inPackage)) {
+  if (!declarations.some((d) => d.inPackage && !d.test)) {
     violations.push({ file: "packages", line: 0, fromPkg: "*", specifier: MIRRORED_TYPES, reason: "no production type declaration to scan; a scan of nothing would pass" });
   }
   const used = new Set<AllowedPair>();
@@ -272,9 +268,9 @@ export function mirroredTypes(context: LintContext, allowed: readonly AllowedPai
       reason: `${what}: ${where(group)}; keep one declaration and import it, or name it in MIRRORED_ALLOWED with why it is a distinct concept`,
     });
   };
-  for (const group of byName(declarations.filter((d) => d.inPackage))) report(group, "one name declared more than once");
-  for (const group of byType(built.checker, declarations)) report(group, new Set(group.map((d) => d.name)).size > 1 ? "one type declared under more than one name" : "one type declared more than once");
-  violations.push(...returnTypeViolations(built, modules));
+  for (const group of byName(declarations.filter((d) => d.inPackage && !d.test))) report(group, "one name declared more than once");
+  for (const group of byType(built, declarations)) report(group, new Set(group.map((d) => d.name)).size > 1 ? "one type declared under more than one name" : "one type declared more than once");
+  violations.push(...returnTypeViolations(built, modules.filter((module) => !module.test)));
   for (const pair of allowed) {
     if (pair.reason.trim() === "") {
       violations.push({ file: pair.files[0] ?? "packages", line: 0, fromPkg: "*", specifier: MIRRORED_TYPES, reason: `the allowed entry ${pair.names.join(", ")} gives no reason; state why the declarations are distinct concepts` });

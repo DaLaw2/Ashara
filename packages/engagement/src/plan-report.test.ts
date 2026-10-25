@@ -2,15 +2,13 @@ import { describe, expect, test, vi } from "vitest";
 import { parseProjectId } from "@ashara/shared";
 import { memoryStepContainment } from "@ashara/shared/testing";
 import type { ProjectBlockCause } from "@ashara/delivery/project-halt";
+import type { DroppedOrderingHints, DuePlanReport, PlanTaskCounts } from "@ashara/delivery/reads";
 import { PlanReports } from "./plan-report.js";
 import type { PlanReportStore } from "./plan-report.js";
 
 const projectId = parseProjectId("00000000-0000-4000-8000-000000000010", "test");
 
-type Dropped = { kind: "recorded"; count: number } | { kind: "unrecorded" };
-
-type Counts = { decomposition: number; sprint0: number; scaffolds: number; checks: number; reviews: number; unrecorded: number; started: number };
-type Revision = { revisionId: string; revision: number; summary: unknown; answersTaken: number };
+type Revision = Extract<DuePlanReport, { readonly revisions: unknown }>["revisions"][number];
 
 const CHANGE_SUMMARY = {
   changes: [{ answer: "Keys contain no whitespace.", decision: "Keys are non-empty and contain no whitespace." }],
@@ -23,8 +21,8 @@ const CHANGE_SUMMARY = {
 };
 
 function reportsFor(
-  tasks: Counts,
-  droppedOrderingHints: Dropped = { kind: "recorded", count: 0 },
+  tasks: PlanTaskCounts,
+  droppedOrderingHints: DroppedOrderingHints = { kind: "recorded", count: 0 },
   revisions: readonly Revision[] = [],
   dueRevisions: readonly Revision[] = [],
   assumptions: ReadonlyArray<{ readonly key: string; readonly statement: string }> = [],
@@ -56,7 +54,7 @@ function reportsFor(
   return { reports: new PlanReports(store, memoryStepContainment(() => true)), posted, folded, revisionPosts, blocked };
 }
 
-const FOUNDED: Counts = { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0, started: 0 };
+const FOUNDED: PlanTaskCounts = { decomposition: 6, sprint0: 1, scaffolds: 1, checks: 6, reviews: 1, unrecorded: 0, started: 0 };
 
 describe("first-plan report", () => {
   test("counts only the tasks toward the client's goal and states the environment setup and the checks apart", async () => {

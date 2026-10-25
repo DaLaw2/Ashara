@@ -81,8 +81,7 @@ class MemorySessionStore implements SessionStore {
   }
 }
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let clientId = "";
 let projectId: ProjectId;
 let root = "";

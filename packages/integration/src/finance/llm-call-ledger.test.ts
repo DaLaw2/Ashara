@@ -26,8 +26,7 @@ vi.mock("@ai-sdk/openai", () => ({ createOpenAI: () => () => stub.model }));
 const DATABASE_URL = resolveTestDatabaseUrl(process.env);
 const NONCE = randomUUID().slice(0, 8);
 
-type Db = Database;
-let db: Db;
+let db: Database;
 let calls: LlmCallRepository;
 let projectId: Awaited<ReturnType<ProjectRepository["create"]>>["id"];
 

@@ -15,8 +15,7 @@ const projectId = parseProjectId("00000000-0000-4000-8000-000000000021", "test")
 const MAIN = "c".repeat(40);
 const MERGE_A = "a".repeat(40);
 
-type Due = DueDeliveredReport;
-type Listed = Due | UnreadDeliveredReport;
+type Listed = DueDeliveredReport | UnreadDeliveredReport;
 
 /** A delivered report's terminal step over `store`, reading the interface file through `productInterface`. */
 function deliveredReports(store: TerminalReportStore, productInterface: ProductInterfaceSource): TerminalReports {
@@ -34,11 +33,11 @@ function listedWith(listed: readonly Listed[], table: GuaranteeTable | "lost"): 
  * A due report's records; `executed`, when not the case under test, is one check that ran, and
  * `reading` a first reading of the tender that asked the client questions.
  */
-type Fields = Omit<Due, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures" | "recordFailures" | "executed" | "reading"> & {
-  readonly executed?: Due["executed"];
-  readonly reading?: Due["reading"];
+type Fields = Omit<DueDeliveredReport, "targetProjectPath" | "kind" | "failures" | "interfaceReadFailures" | "recordFailures" | "executed" | "reading"> & {
+  readonly executed?: DueDeliveredReport["executed"];
+  readonly reading?: DueDeliveredReport["reading"];
 };
-const ONE_RUN: Due["executed"] = { kind: "recorded", checks: [{ task: "Count words", name: "counts", command: "python wc.py sample.txt" }] };
+const ONE_RUN: DueDeliveredReport["executed"] = { kind: "recorded", checks: [{ task: "Count words", name: "counts", command: "python wc.py sample.txt" }] };
 
 /** The table the records reader builds over `records`, as it builds one over the stored records. */
 async function tableOf(records: GuaranteeRecords): Promise<GuaranteeTable> {
@@ -53,7 +52,7 @@ const INTERFACE_FILE = "PUBLIC_INTERFACE.md";
 type InterfaceRead = Awaited<ReturnType<ProductInterfaceSource["at"]>>;
 
 async function render(fields: Fields, read: InterfaceRead = { kind: "absent" }): Promise<string> {
-  const due: Due = { ...fields, executed: fields.executed ?? ONE_RUN, reading: fields.reading ?? { kind: "not-needed" }, kind: "due", failures: 0, interfaceReadFailures: 0, recordFailures: 0, targetProjectPath: WORKSPACE };
+  const due: DueDeliveredReport = { ...fields, executed: fields.executed ?? ONE_RUN, reading: fields.reading ?? { kind: "not-needed" }, kind: "due", failures: 0, interfaceReadFailures: 0, recordFailures: 0, targetProjectPath: WORKSPACE };
   const posted: string[] = [];
   const reads: string[] = [];
   const reports = deliveredReports(
@@ -316,7 +315,7 @@ describe("a delivered report that fails is its own project's", () => {
     return { reports, posted, failures };
   }
 
-  const due = (sweepId: string, id: typeof projectId, targetProjectPath: string, failures: number, interfaceReadFailures = failures): Due => ({
+  const due = (sweepId: string, id: typeof projectId, targetProjectPath: string, failures: number, interfaceReadFailures = failures): DueDeliveredReport => ({
     ...BASE,
     executed: ONE_RUN,
     reading: { kind: "not-needed" },

@@ -5,7 +5,9 @@
  * its entry is a violation, and so is a namespace or default import of that entry, `export *` from
  * it, or any other edge that may load it (a dynamic import, a require, a vitest loader, an import
  * whose target no literal spells whole), each of which reaches the symbol by no name. Edges and
- * export lists are read from each file's syntax tree (import-targets.ts).
+ * export lists are read from each file's syntax tree (import-targets.ts), and what an entry exports
+ * from the gate's one program (lint.ts contextProgram): the names the checker finds in the export
+ * table of the module the entry's specifier resolves to, by any export form.
  * Inside the module, re-exporting a held symbol (`export { x }`, `export { x } from`) hands it to
  * every importer, so that is a violation too. A held symbol the entry does not export, or that no
  * file of the module imports, is a violation of the rules: the list names only what holds.
@@ -13,42 +15,28 @@
  * in an exported object). A relative path into the held package is refused by subpath-entries.
  */
 
-import fs from "node:fs";
 import path from "node:path";
-import { parseJson } from "@ashara/shared";
 import { exportLists } from "../import-targets.js";
-import type { LintContext, PackageScan, Violation } from "./lint.js";
+import { contextProgram, type LintContext, type PackageScan, type Violation } from "./lint.js";
 import type { HeldName } from "./rules.js";
 import { extractNamedImports, matchesAnyGlob, mayNameAshara } from "./source-files.js";
-import { PackageExportsSchema } from "./subpath-entries.js";
 
-const EXPORTED_DECLARATION_RE = (name: string): RegExp => new RegExp(`\\bexport\\s+(?:declare\\s+)?(?:const|let|var|function|async\\s+function|class|abstract\\s+class|enum)\\s+${name.replace(/\$/g, "\\$")}\\b`);
-
-/** The file an entry of a package resolves to by its package.json exports; null when it exports no such entry. */
-function entryFile(packagesDir: string, held: HeldName): string | null {
-  const manifest = path.join(packagesDir, held.pkg, "package.json");
-  if (!fs.existsSync(manifest)) return null;
-  const { exports } = parseJson(PackageExportsSchema, fs.readFileSync(manifest, "utf-8"), manifest);
-  const subpath = held.entry === held.pkg ? "." : `./${held.entry.slice(held.pkg.length + 1)}`;
-  const target = exports[subpath];
-  return target === undefined ? null : path.join(packagesDir, held.pkg, target);
-}
-
-function exportsName(file: string, name: string): boolean {
-  const content = fs.readFileSync(file, "utf-8");
-  return EXPORTED_DECLARATION_RE(name).test(content) || exportLists(file, content).some((list) => list.names.some((entry) => entry.alias === name));
+/** Whether the module `@ashara/<entry>` resolves to, from the scanned package at `from`, exports `name` by any export form; false when it resolves to no module of the program. */
+function entryExports(context: LintContext, from: string, held: HeldName): boolean {
+  const built = contextProgram(context);
+  const moduleSymbol = built.moduleSymbol(path.join(from, "index.ts"), `@ashara/${held.entry}`);
+  return moduleSymbol !== undefined && built.checker.getExportsOfModule(moduleSymbol).some((exported) => exported.name === held.name);
 }
 
 function heldViolations(scan: PackageScan, module: string, held: readonly HeldName[], context: LintContext): Violation[] {
-  const { root, packagesDir, rulesRelative } = context;
+  const { root, rulesRelative } = context;
   const globs = scan.rule.modules.get(module);
   if (globs === undefined) return [];
   const violations: Violation[] = [];
   const rule = `module-names.${module}`;
   const imported = new Set<string>();
   for (const each of held) {
-    const file = entryFile(packagesDir, each);
-    if (file === null || !fs.existsSync(file) || !exportsName(file, each.name)) {
+    if (!entryExports(context, scan.root, each)) {
       violations.push({ file: rulesRelative, line: 0, fromPkg: scan.name, specifier: rule, reason: `"@ashara/${each.entry}" exports no "${each.name}"; a rule that holds nothing passes everything` });
     }
   }
