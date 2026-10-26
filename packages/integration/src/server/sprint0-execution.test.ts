@@ -403,7 +403,7 @@ describe("Sprint 0", () => {
     expect(sprint0.result.status, sprint0.result.detail).toBe("completed");
     // Sprint 0 itself ran on the BaseCell.
     expect(sprint0.events.find((e) => e.event === "cell_created")).toMatchObject({ image: base.image, cellImage: { kind: "base-cell" } });
-    // What the orchestrator does on a completed result: the merge record, then Completed.
+    // What the contractor loop does on a completed result: the merge record, then Completed.
     if (sprint0.result.status !== "completed" || sprint0.result.delivered.kind !== "merged") throw new Error("Sprint 0 did not merge");
     const mergeCommit = sprint0.result.delivered.mergeCommit;
     const { stdout: mainHead } = await run("git", ["-C", sprint0.target, "rev-parse", "main"]);

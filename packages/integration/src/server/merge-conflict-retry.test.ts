@@ -183,7 +183,7 @@ function promptAt(mock: MockLanguageModelV4, call: number): string {
   return JSON.stringify(mock.doGenerateCalls[call]?.prompt ?? null);
 }
 
-/** What the orchestrator does with a failed result: the item to Failed, then the failure router on the stored record. */
+/** What the contractor loop does with a failed result: the item to Failed, then the failure router on the stored record. */
 async function routeFailure(taskId: WorkItemId, result: TaskRun["result"]): Promise<string> {
   if (result.status !== "failed" && result.status !== "blocked") throw new Error(`a ${result.status} result is not routed as a failure`);
   const repo = workItems();

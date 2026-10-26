@@ -158,7 +158,7 @@ const PREDICATE_RULES: readonly PredicateRule[] = [
     owners: [ENGAGEMENT_REPORT_SUBJECTS],
     // A literal a report's subject is compared with, stored as or named by, the column and the
     // comparison only whitespace apart; the same words name the core loop's contained steps (shared
-    // ContainedStep), which are another vocabulary and not read.
+    // CycleStep), which are another vocabulary and not read.
     patterns: [
       new RegExp(`reports_?[oO]n\\b['"]?\\s*(?:===?|!==?|<>|=|:|,|\\b(?:IN|in)\\s*\\()\\s*${REPORT_SUBJECT_LITERAL}`),
       new RegExp(`\\bsubject\\w*\\s*(?:===?|!==?|=|:)\\s*${REPORT_SUBJECT_LITERAL}`, "i"),

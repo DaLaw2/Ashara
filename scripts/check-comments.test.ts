@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   COMMENT_LINT_EXCLUDES,
+  commentTree,
   definedLabels,
   extractCommentLines,
   findStaleComments,
@@ -14,12 +15,18 @@ import {
 } from "./check-comments.js";
 
 const NO_LABELS: ReadonlySet<string> = new Set();
+const NO_TREE = commentTree([], new Map());
 
 // Spelled in pieces so this file never holds a numbered migration reference as source text.
 const MIGRATION = "migration";
 
-function classesIn(file: string, content: string, labels: ReadonlySet<string> = NO_LABELS): string[] {
-  return findStaleComments(file, content, labels).map((finding) => finding.patternClass);
+function classesIn(
+  file: string,
+  content: string,
+  labels: ReadonlySet<string> = NO_LABELS,
+  tree = NO_TREE,
+): string[] {
+  return findStaleComments(file, content, labels, tree).map((finding) => finding.patternClass);
 }
 
 // One planted comment per pattern class; each must be named by exactly its class.
@@ -119,7 +126,7 @@ describe("test titles are read as comments", () => {
       '  expect("ADR-074").toBe("ADR-074");',
       "});",
     ].join("\n");
-    const found = findStaleComments("packages/x/src/a.test.ts", content, NO_LABELS);
+    const found = findStaleComments("packages/x/src/a.test.ts", content, NO_LABELS, NO_TREE);
     expect(found.map((f) => [f.line, f.patternClass])).toEqual([
       [1, "migration number"],
       [2, "decision number"],
@@ -171,7 +178,7 @@ describe("non-script files", () => {
 
   test("Markdown prose is read and fenced code is not", () => {
     const content = "The rule (ADR-074).\n\n```\ngrep ADR-074 docs/x.md\n```\n<!-- d89 -->\n";
-    const found = findStaleComments("README.md", content, NO_LABELS);
+    const found = findStaleComments("README.md", content, NO_LABELS, NO_TREE);
     expect(found.map((f) => [f.line, f.patternClass])).toEqual([
       [1, "decision record id"],
       [6, "decision number"],
@@ -208,6 +215,122 @@ describe("a numbered SQL file a comment names", () => {
     expect(classesIn("packages/x/src/a.ts", "// Built from 048_no_item_waits.sql.\n", names)).toEqual([
       "migration number",
     ]);
+  });
+});
+
+describe("a path a comment names", () => {
+  const tree = commentTree(
+    ["packages/delivery/src/parked-exits.ts", "packages/engagement/src/repositories/terminal-report.ts", "config/models.toml"],
+    new Map([
+      ["packages/x/src/contract.ts", 'export const CONTRACT = "environment/environment.toml";\n'],
+      ["packages/x/src/a.test.ts", 'expect(read("fixture/only.toml")).toBe(1);\n'],
+    ]),
+  );
+
+  test("a file named after the orchestrator fails whatever the tree holds", () => {
+    expect(classesIn("packages/x/src/a.ts", "// The loop's exit (orchestrator parked-exits.ts).\n", NO_LABELS, tree)).toEqual([
+      "nonexistent package path",
+    ]);
+    expect(classesIn("packages/x/src/a.ts", "// The runner (orchestrator/runner.ts).\n", NO_LABELS, tree)).toEqual([
+      "nonexistent package path",
+      "missing path",
+    ]);
+  });
+
+  test("a path no tracked file ends with fails; a tracked one, by whole path or trailing part, passes", () => {
+    expect(classesIn("packages/x/src/a.ts", "// Read by foo/missing.ts.\n", NO_LABELS, tree)).toEqual(["missing path"]);
+    expect(classesIn("packages/x/src/a.ts", "// Priced in config/models.toml.\n", NO_LABELS, tree)).toEqual([]);
+    expect(classesIn("packages/x/src/a.ts", "// Kept by repositories/terminal-report.ts.\n", NO_LABELS, tree)).toEqual([]);
+    expect(classesIn("packages/x/src/a.ts", "// Kept by src/repositories/terminal-report.ts.\n", NO_LABELS, tree)).toEqual([]);
+    expect(classesIn("packages/x/src/a.ts", "// Kept by other/terminal-report.ts.\n", NO_LABELS, tree)).toEqual(["missing path"]);
+  });
+
+  test("a path production code holds as a string passes; one a test fixture holds does not", () => {
+    expect(classesIn("packages/y/src/a.ts", "// Parses environment/environment.toml.\n", NO_LABELS, tree)).toEqual([]);
+    expect(classesIn("packages/y/src/a.ts", "// Reads fixture/only.toml.\n", NO_LABELS, tree)).toEqual(["missing path"]);
+  });
+
+  test("a file name after a package name resolves inside that package only", () => {
+    expect(classesIn("packages/x/src/a.ts", "// The sweep (delivery parked-exits.ts).\n", NO_LABELS, tree)).toEqual([]);
+    expect(classesIn("packages/x/src/a.ts", "// The report (engagement parked-exits.ts).\n", NO_LABELS, tree)).toEqual([
+      "missing path",
+    ]);
+    expect(classesIn("packages/x/src/a.ts", "// The report (delivery missing.ts).\n", NO_LABELS, tree)).toEqual(["missing path"]);
+    expect(classesIn("packages/x/src/a.ts", "// A plain index.ts or a lone name.ts.\n", NO_LABELS, tree)).toEqual([]);
+  });
+
+  test("a package name in any case, or ending the line before the file name, resolves the same", () => {
+    expect(classesIn("packages/x/src/a.ts", "// The sweep (Delivery parked-exits.ts).\n", NO_LABELS, tree)).toEqual([]);
+    expect(classesIn("packages/x/src/a.ts", "// The report (Engagement parked-exits.ts).\n", NO_LABELS, tree)).toEqual([
+      "missing path",
+    ]);
+    const split = "/**\n * The kinds it keeps (engagement\n * parked-exits.ts), and the sweep (delivery\n * parked-exits.ts).\n */\n";
+    expect(findStaleComments("packages/x/src/a.ts", split, NO_LABELS, tree).map((f) => [f.line, f.patternClass])).toEqual([
+      [3, "missing path"],
+    ]);
+  });
+
+  test("an orchestrator file name in any case, or split across a line break, fails", () => {
+    expect(classesIn("packages/x/src/a.ts", "// The loop's exit (Orchestrator parked-exits.ts).\n", NO_LABELS, tree)).toEqual([
+      "nonexistent package path",
+    ]);
+    const split = "/**\n * The loop's exit (orchestrator\n * parked-exits.ts), and its sweep (Delivery\n * parked-exits.ts).\n */\n";
+    expect(findStaleComments("packages/x/src/a.ts", split, NO_LABELS, tree).map((f) => [f.line, f.patternClass, f.match])).toEqual([
+      [3, "nonexistent package path", "orchestrator parked-exits.ts"],
+    ]);
+  });
+});
+
+describe("a symbol or file named as a retired context's", () => {
+  test("a planning or development home fails, on one line or across a line break", () => {
+    expect(classesIn("packages/x/src/a.ts", "// The exit (planning's exitStaleChecks).\n")).toEqual(["retired context home"]);
+    expect(classesIn("packages/x/src/a.ts", "// The class (development's fault-class.ts).\n")).toEqual(["retired context home"]);
+    expect(classesIn("packages/x/src/a.ts", "// The domain layer (planning BC).\n")).toEqual(["retired context home"]);
+    expect(classesIn("packages/x/src/a.ts", "// Closer to the domain (e.g. planning/domain).\n")).toEqual(["retired context home"]);
+    const split = "/**\n * The dispute's exit (planning's\n * exitDisputedCheck), and its record (Delivery's\n * exitDisputedCheck).\n */\n";
+    expect(findStaleComments("packages/x/src/a.ts", split, NO_LABELS, NO_TREE).map((f) => [f.line, f.patternClass, f.match])).toEqual([
+      [3, "retired context home", "planning's exitDisputedCheck"],
+    ]);
+  });
+
+  test("planning or development as an activity, or a real context's symbol, passes", () => {
+    expect(classesIn("packages/x/src/a.ts", "// Reissued in a stopped planning's message.\n")).toEqual([]);
+    expect(classesIn("packages/x/src/a.ts", "// The first planning's last error, during development.\n")).toEqual([]);
+    expect(classesIn("packages/x/src/a.ts", "// The exit (Delivery's exitStaleChecks).\n")).toEqual([]);
+  });
+});
+
+describe("a @testseam tag that names a test file", () => {
+  const tree = commentTree(
+    ["packages/x/src/sweep.test.ts", "packages/y/src/other.test.ts"],
+    new Map([
+      ["packages/x/src/sweep.test.ts", 'import { releaseBlocks } from "./sweep.js";\nreleaseBlocks();\n'],
+      ["packages/y/src/other.test.ts", 'import { giveUp } from "./give-up.js";\ngiveUp();\n'],
+    ]),
+  );
+  const tagged = (tag: string, declaration: string): [number, string, string][] =>
+    findStaleComments("packages/x/src/index.ts", `/** @testseam ${tag} */\n${declaration}\n`, NO_LABELS, tree).map((f) => [
+      f.line,
+      f.patternClass,
+      f.match,
+    ]);
+
+  test("passes when that file names a value the declaration exports or declares", () => {
+    expect(tagged("sweep.test.ts drives it", 'export { releaseBlocks } from "./sweep.js";')).toEqual([]);
+    expect(tagged("sweep.test.ts drives it", "export function releaseBlocks(): void {}")).toEqual([]);
+    expect(tagged("the integration tests drive it", 'export { anything } from "./sweep.js";')).toEqual([]);
+  });
+
+  test("fails when that file never names the value, or no tracked test file has that name", () => {
+    expect(tagged("other.test.ts drives it", 'export { releaseBlocks } from "./sweep.js";')).toEqual([
+      [1, "testseam without caller", "other.test.ts"],
+    ]);
+    expect(tagged("gone.test.ts drives it", "export const releaseBlocks = 1;")).toEqual([[1, "testseam without caller", "gone.test.ts"]]);
+  });
+
+  test("a type-only declaration and a glob are not judged", () => {
+    expect(tagged("other.test.ts reads it", "export interface Finding { readonly line: number }")).toEqual([]);
+    expect(tagged("every *.podman.test.ts reads it", "export const releaseBlocks = 1;")).toEqual([]);
   });
 });
 
@@ -256,6 +379,18 @@ describe("the script over a repository", () => {
     const run = lint();
     expect(run.status).toBe(1);
     expect(run.stderr).toContain('packages/x/src/a.ts:1: design label "S9"');
+  });
+
+  test("a comment naming an untracked path fails; one naming a tracked path passes", () => {
+    repoWith({
+      "packages/x/src/a.ts": "// Swept by orchestrator parked-exits.ts.\n// Read by foo/missing.ts.\n// Read by x/src/b.ts.\nexport const a = 1;\n",
+      "packages/x/src/b.ts": "export const b = 1;\n",
+    });
+    const run = lint();
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('packages/x/src/a.ts:1: nonexistent package path "orchestrator parked-exits.ts"');
+    expect(run.stderr).toContain('packages/x/src/a.ts:2: missing path "foo/missing.ts"');
+    expect(run.stderr).not.toContain("packages/x/src/a.ts:3");
   });
 
   test("a clean repository passes", () => {

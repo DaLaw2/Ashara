@@ -11,7 +11,7 @@
  * `--psql` is the command that runs psql with the SQL on its stdin; the scratch database's name is
  * appended as its last argument. Split on spaces, no quoting. With the database in a container:
  *
- *   npx tsx scripts/replay-run-state.ts --dump kept-run/ashara_run.sql \
+ *   npx tsx scripts/replay-run-state.ts --dump ashara_run_1.sql \
  *     --psql "podman exec -i ashara-db psql -U ashara -v ON_ERROR_STOP=1 -q -d"
  *
  * The scratch database `ashara_replay_*` is created on the server of REPLAY_DATABASE_URL (default

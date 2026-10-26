@@ -18,7 +18,7 @@ export {
   SubstrateUnavailable,
 } from "./errors.js";
 export { CellExecFailed, CellExecInterrupted, cellExecInterruptedOf } from "./errors.js";
-/** @testseam the integration cell.podman.test.ts asserts the refusal class; loadBaseCell throws it */
+/** @testseam base-cell.test.ts asserts the refusal class; loadBaseCell throws it */
 export { BaseCellConfigInvalid } from "./errors.js";
 export { WORKSPACE_ROOT } from "./workspace-path.js";
 export { execFileGitRunner, runHostGit, withGitRunner } from "./host-git.js";

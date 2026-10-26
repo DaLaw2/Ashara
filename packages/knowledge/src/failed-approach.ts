@@ -26,7 +26,7 @@ function routedLesson(title: string, routed: RoutedFailure, detail: string): str
 
 /**
  * Records a failed_approaches row. `learned` defaults to `errorDetail` — the field is never left
- * empty, even for the plain thrown-orchestrator-error call site that has no richer lesson to
+ * empty, even for the plain call site of an error Ashara's own code threw, that has no richer lesson to
  * compose. A failure the FailureRouter routed passes its decision (RoutedFailure), and the lesson
  * is composed here. `epicIdOf` walks the task's Epic ancestor, which Delivery owns; a failure of the walk or of
  * the write is logged and never reaches the caller.

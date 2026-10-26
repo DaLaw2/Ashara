@@ -8,7 +8,7 @@ services:
     ports:
       # 127.0.0.1-only binding is the sole access boundary under trust auth: a wider
       # binding lets any app on the network, an E2E-built one included, write into the
-      # orchestrator's own database. Do not widen without restoring password auth.
+      # Ashara's own database. Do not widen without restoring password auth.
       - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ashara

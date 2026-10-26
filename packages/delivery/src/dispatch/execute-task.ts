@@ -126,7 +126,7 @@ function ownerUnresolved({ context, task, sessionId }: BlockedBeforeWork, unreso
 
 /**
  * No catalog model has a window larger than one an attempt of the task overflowed: `no_wider_model`
- * before any worktree or cell exists, and the orchestrator gives the task up for a plan repair.
+ * before any worktree or cell exists, and the contractor loop gives the task up for a plan repair.
  */
 function noWiderModel({ context, task, sessionId }: BlockedBeforeWork, unfit: NoWiderModel): ExecutionResult {
   const { eventSink, logger } = context.deps;

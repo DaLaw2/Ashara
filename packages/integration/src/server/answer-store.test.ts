@@ -469,9 +469,9 @@ describe("the client's answers", () => {
           // Another writer appends a version that leaves this question and its assumption as they were.
           await db.execute(sql`
             INSERT INTO vision_documents (project_id, version, vision_text, summary, inferences, scope_boundaries,
-                                          confirmed_directions, open_questions, change_reason,
+                                          open_questions, change_reason,
                                           contract_form, "interface", guarantees, exclusions)
-            SELECT project_id, version + 1, vision_text, summary, inferences, scope_boundaries, confirmed_directions,
+            SELECT project_id, version + 1, vision_text, summary, inferences, scope_boundaries,
                    open_questions, 'a concurrent writer', contract_form, "interface", guarantees, exclusions
               FROM vision_documents WHERE project_id = ${projectId} ORDER BY version DESC LIMIT 1`);
         }

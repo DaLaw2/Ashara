@@ -35,7 +35,7 @@ export class SuiteReviewRun {
   /**
    * The review of the plan revision's suites. Clean only once the model's
    * verdict validated against its schema and names only suites it read: the plan's implementations
-   * are released by completing it. Problems are returned for the orchestrator to route. A refused
+   * are released by completing it. Problems are returned for Delivery to route. A refused
    * model call is a refusal like an agent's; a verdict that never validated or is unfit to act on
    * fails the review; a provider's failure or Ashara's own (an unreadable suite, a store, its code)
    * blocks it under that class. Nothing is released on any of them.

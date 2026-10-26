@@ -16,7 +16,7 @@ import { projectCapCause, projectWorkCause } from "../project-halt.js";
 export const INFRASTRUCTURE_FAULT_BUDGET = 3;
 
 /**
- * Why a dispatch stopped on something that is not the task's work (development's fault-class.ts):
+ * Why a dispatch stopped on something that is not the task's work (the fault class Quality assigns):
  * its class, what was unavailable, and the fault's own diagnostic.
  */
 export interface InfrastructureFault {

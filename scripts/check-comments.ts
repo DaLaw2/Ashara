@@ -39,6 +39,21 @@
  * `after`, `since`, `until` or an opening parenthesis (`before` followed by such a number, `pre-`
  * joined to one, a parenthesised list of them), since a quantity in prose carries no leading zero.
  *
+ * A comment names only files that exist. A path-like token (slash-separated parts ending in a
+ * script, SQL or TOML file) fails unless a tracked file is that path or ends with it after a slash,
+ * or production code holds the token in a string literal: then it is a path the code reads, such as
+ * the target repository's contract file, which no Ashara checkout tracks. A file name written after
+ * the name of a package (a directory under the packages directory, in any case, on the same line or across a line
+ * break) fails unless that package tracks a file of that name. A file named after an orchestrator
+ * package, in any case and on the same line or across a line break, fails whatever the tree holds,
+ * since no package of that name exists. The planning and development contexts are retired too, their
+ * code now Delivery's, Quality's and execution-infra's: a symbol or file named as theirs (a
+ * camel-case name or a script file after `planning's` or `development's`, on one line or across a
+ * line break), the context written with `BC` after it, and a path under it fail, since none names a
+ * home that exists. Either word as an activity (`a stopped planning's message`) passes. A `@testseam` tag that names a test file fails unless a
+ * tracked test file of that name mentions a value the tagged declaration declares or exports: the
+ * tag claims that file drives the seam, and a file that never names it does not.
+ *
  * Blind spots, each a stale comment this check passes:
  * - A history account in plain words ("X now does Y", "after the outage we ...") uses no marker the
  *   history pattern lists; only the listed markers are caught.
@@ -50,6 +65,16 @@
  *   ("before 58") passes.
  * - A label that a string literal in the same file or package happens to equal passes there.
  * - A string literal that is prose for a human (a log message, a fixture description) is not read.
+ * - A slash-separated path split across two comment lines is read as two halves, neither a path;
+ *   only a package, orchestrator or retired context name ending one line and a file or symbol name
+ *   opening the next are joined.
+ * - A symbol named as a real package's (`Quality's runSuitesOnCheckout`) is not checked against that
+ *   package's declarations; only the retired context names are caught.
+ * - A `@testseam` tag on a type-only declaration is not judged: a test uses a type by its shape, not
+ *   its name. A test file that names the value without calling it passes.
+ * - A bare file name after no package name is not resolved: a placeholder in a usage line or a file
+ *   another tool owns is written the same way.
+ * - A path that resolves by suffix to some other tracked file of the same trailing name passes.
  *
  * Exits 0 when no comment matches, 1 on a match or when a file cannot be read.
  *
@@ -92,6 +117,16 @@ interface StalePattern {
 
 const DESIGN_LABEL_CLASS = "design label";
 const MIGRATION_CLASS = "migration number";
+const MISSING_PATH_CLASS = "missing path";
+const PATH_TOKEN = /(?<![\w./-])[\w-]+(?:\/[\w.-]+)+\.(?:[cm]?ts|sql|toml)\b/g;
+const PACKAGE_FILE = /\b([A-Za-z][\w-]*) ([\w.-]+\.(?:[cm]?ts|sql|toml))\b/g;
+const ORCHESTRATOR_CLASS = "nonexistent package path";
+const ORCHESTRATOR_FILE = /\borchestrator[ /][\w-]+\.ts\b/gi;
+const RETIRED_CONTEXT_CLASS = "retired context home";
+const RETIRED_CONTEXT_HOME = /\b(?:[Pp]lanning|[Dd]evelopment)(?:'s (?:[a-z]+[A-Z]\w*|[\w-]+\.[cm]?ts)\b| BC\b|\/[a-z][\w-]*)/g;
+const TESTSEAM_CLASS = "testseam without caller";
+const TESTSEAM_FILE = /(?<![\w.*-])\w[\w.-]*\.test\.[cm]?ts\b/g;
+const COMMENT_MARKER = /^\s*(?:\/\/+|\*|#|--)?\s*/;
 const NUMBERED_SQL_FILE = /^\d{3}_[a-z0-9_]+\.sql$/;
 const RECORD_LABEL_CLASS = "record label";
 const LABEL_SHAPE = /^(?:[A-Z]\d{1,2}[a-z]?|[A-Z]{2,4}\d{1,3}[a-z]?)$/;
@@ -126,6 +161,8 @@ const STALE_PATTERNS: readonly StalePattern[] = [
   },
   { patternClass: "date", regex: /\b20\d{2}-[01]\d-[0-3]\d\b/g },
   { patternClass: "governance path", regex: /(?<![\w./-])docs\/[\w.-]/g },
+  { patternClass: ORCHESTRATOR_CLASS, regex: ORCHESTRATOR_FILE },
+  { patternClass: RETIRED_CONTEXT_CLASS, regex: RETIRED_CONTEXT_HOME },
   { patternClass: "run name", regex: /\b(?:m\d+final\d*|run\d+[a-z]+|w\d+[a-z])\b/g },
   {
     patternClass: "story by name",
@@ -322,19 +359,187 @@ function firstMatch(pattern: StalePattern, text: string, labels: ReadonlySet<str
 }
 
 /**
+ * What a comment's path may resolve to: the tracked files, by whole path or by a trailing part after
+ * a slash; the base names each package tracks; and the path-like tokens production code holds in a
+ * string literal.
+ * @testseam check-comments.test.ts resolves planted paths against a small tree without running the CLI
+ */
+export interface CommentTree {
+  readonly suffixes: ReadonlySet<string>;
+  readonly packageFiles: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly codePaths: ReadonlySet<string>;
+  readonly testFiles: ReadonlyMap<string, readonly string[]>;
+}
+
+function literalPaths(relPath: string, content: string): string[] {
+  const paths: string[] = [];
+  if (!isScript(relPath) || isTestFile(relPath) || content.search(PATH_TOKEN) < 0) return paths;
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+      for (const match of node.text.matchAll(PATH_TOKEN)) paths.push(match[0]);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parseScript(relPath, content));
+  return paths;
+}
+
+/**
+ * The tree `tracked` lists, with the code paths the production scripts among `files` hold.
+ * @testseam check-comments.test.ts builds a small tree without running the CLI
+ */
+export function commentTree(tracked: readonly string[], files: ReadonlyMap<string, string>): CommentTree {
+  const suffixes = new Set<string>();
+  const packageFiles = new Map<string, Set<string>>();
+  for (const relPath of tracked) {
+    const parts = relPath.split("/");
+    for (let i = 0; i < parts.length; i += 1) suffixes.add(parts.slice(i).join("/"));
+    const name = parts[1];
+    const base = parts.at(-1);
+    if (parts[0] !== "packages" || parts.length < 3 || name === undefined || base === undefined) continue;
+    const names = packageFiles.get(name) ?? new Set<string>();
+    names.add(base);
+    packageFiles.set(name, names);
+  }
+  const codePaths = new Set<string>();
+  for (const [file, content] of files) for (const token of literalPaths(file, content)) codePaths.add(token);
+  const testFiles = new Map<string, string[]>();
+  for (const relPath of tracked) {
+    if (!isTestFile(relPath)) continue;
+    const content = files.get(relPath);
+    if (content === undefined) continue;
+    const base = path.posix.basename(relPath);
+    const contents = testFiles.get(base);
+    if (contents === undefined) testFiles.set(base, [content]);
+    else contents.push(content);
+  }
+  return { suffixes, packageFiles, codePaths, testFiles };
+}
+
+function missingPackageFile(text: string, tree: CommentTree): string | null {
+  for (const match of text.matchAll(PACKAGE_FILE)) {
+    const [token, name, base] = match;
+    if (name === undefined || base === undefined) continue;
+    const names = tree.packageFiles.get(name.toLowerCase());
+    if (names !== undefined && !names.has(base)) return token;
+  }
+  return null;
+}
+
+function missingPath(text: string, tree: CommentTree): string | null {
+  for (const match of text.matchAll(PATH_TOKEN)) {
+    if (!tree.suffixes.has(match[0]) && !tree.codePaths.has(match[0])) return match[0];
+  }
+  return missingPackageFile(text, tree);
+}
+
+/** A package or context name ending one comment line and the file or symbol opening the next, read as one phrase. */
+function lineBreakPhrase(previous: string, text: string): string {
+  const tail = /(\S+)\s*$/.exec(previous)?.[1];
+  const head = /^\S+/.exec(text.replace(COMMENT_MARKER, ""))?.[0];
+  return tail === undefined || head === undefined ? "" : `${tail} ${head}`;
+}
+
+function splitFinding(phrase: string, tree: CommentTree): { readonly patternClass: string; readonly match: string } | null {
+  const orchestrator = phrase.match(new RegExp(ORCHESTRATOR_FILE.source, "i"));
+  if (orchestrator !== null) return { patternClass: ORCHESTRATOR_CLASS, match: orchestrator[0] };
+  const retired = phrase.match(new RegExp(RETIRED_CONTEXT_HOME.source));
+  if (retired !== null) return { patternClass: RETIRED_CONTEXT_CLASS, match: retired[0] };
+  const missing = missingPackageFile(phrase, tree);
+  return missing === null ? null : { patternClass: MISSING_PATH_CLASS, match: missing };
+}
+
+/** The value names a statement's export list names, local and exported; the module it names is not read. */
+function exportedValueNames(node: ts.Node): string[] {
+  if (!ts.isStatement(node) || ts.isModuleDeclaration(node)) return [];
+  const names: string[] = [];
+  const collect = (child: ts.Node): void => {
+    if (!ts.isExportSpecifier(child)) {
+      ts.forEachChild(child, collect);
+      return;
+    }
+    if (child.isTypeOnly || child.parent.parent.isTypeOnly) return;
+    names.push(child.name.text);
+    if (child.propertyName !== undefined) names.push(child.propertyName.text);
+  };
+  ts.forEachChild(node, collect);
+  return names;
+}
+
+function declaredValueNames(node: ts.Node): string[] {
+  const exported = exportedValueNames(node);
+  if (exported.length > 0) return exported;
+  if (ts.isVariableStatement(node)) {
+    return node.declarationList.declarations.flatMap((declaration) =>
+      ts.isIdentifier(declaration.name) ? [declaration.name.text] : [],
+    );
+  }
+  if (
+    ts.isFunctionDeclaration(node) ||
+    ts.isClassDeclaration(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isPropertyDeclaration(node) ||
+    ts.isEnumDeclaration(node)
+  ) {
+    return node.name !== undefined && (ts.isIdentifier(node.name) || ts.isPrivateIdentifier(node.name)) ? [node.name.text] : [];
+  }
+  return [];
+}
+
+function mentions(content: string, name: string): boolean {
+  return new RegExp(`(?<![\\w$])${name.replace(/[$]/g, "\\$")}(?![\\w$])`).test(content);
+}
+
+/**
+ * The `@testseam` tags in one script whose named test file is untracked or never names a value the
+ * tagged declaration declares or exports.
+ */
+function testseamFindings(relPath: string, content: string, tree: CommentTree): StaleCommentFinding[] {
+  if (!isScript(relPath) || !content.includes("@testseam")) return [];
+  const source = parseScript(relPath, content);
+  const seen = new Set<number>();
+  const findings: StaleCommentFinding[] = [];
+  const visit = (node: ts.Node): void => {
+    const ranges = ts.getLeadingCommentRanges(content, node.getFullStart());
+    for (const range of ranges === undefined ? [] : ranges) {
+      const names = declaredValueNames(node);
+      if (names.length === 0 || seen.has(range.pos)) continue;
+      seen.add(range.pos);
+      const comment = content.slice(range.pos, range.end);
+      if (!comment.includes("@testseam")) continue;
+      for (const match of comment.matchAll(TESTSEAM_FILE)) {
+        const contents = tree.testFiles.get(match[0]);
+        if (contents?.some((text) => names.some((name) => mentions(text, name))) === true) continue;
+        const at = range.pos + match.index;
+        const line = source.getLineAndCharacterOfPosition(at).line + 1;
+        const lineEnd = content.indexOf("\n", at);
+        const text = content.slice(content.lastIndexOf("\n", at) + 1, lineEnd < 0 ? content.length : lineEnd);
+        findings.push({ file: relPath, line, patternClass: TESTSEAM_CLASS, match: match[0], text: text.trim() });
+      }
+    }
+    for (const child of node.getChildren(source)) visit(child);
+  };
+  visit(source);
+  return findings;
+}
+
+/**
  * The stale patterns in one file's comments and test titles, one finding per line and pattern class.
  * `names` holds what a comment here may name besides this file's own labels (definedLabels over it):
  * the numbered SQL files trackedSqlNames finds and the labels packageLabels gives this file's
- * package. A literal anywhere else, such as another file's test fixture id, exempts nothing.
+ * package. A literal anywhere else, such as another file's test fixture id, exempts nothing. `tree`
+ * is what a path a comment names must resolve to.
  * @testseam check-comments.test.ts plants one comment per pattern class without running the CLI
  */
 export function findStaleComments(
   relPath: string,
   content: string,
   names: ReadonlySet<string>,
+  tree: CommentTree,
 ): StaleCommentFinding[] {
   const labels = new Set([...names, ...definedLabels(relPath, content)]);
   const findings: StaleCommentFinding[] = [];
+  let previous: CommentLine | null = null;
   for (const { line, text } of extractCommentLines(relPath, content)) {
     for (const pattern of STALE_PATTERNS) {
       const match = firstMatch(pattern, text, labels);
@@ -342,7 +547,16 @@ export function findStaleComments(
         findings.push({ file: relPath, line, patternClass: pattern.patternClass, match, text: text.trim() });
       }
     }
+    const missing = missingPath(text, tree);
+    const split = previous?.line === line - 1 ? splitFinding(lineBreakPhrase(previous.text, text), tree) : null;
+    if (missing !== null) {
+      findings.push({ file: relPath, line, patternClass: MISSING_PATH_CLASS, match: missing, text: text.trim() });
+    } else if (split !== null) {
+      findings.push({ file: relPath, line, patternClass: split.patternClass, match: split.match, text: text.trim() });
+    }
+    previous = { line, text };
   }
+  findings.push(...testseamFindings(relPath, content, tree));
   return findings;
 }
 
@@ -416,9 +630,10 @@ function main(): void {
   }
   const sqlNames = trackedSqlNames(tracked);
   const byPackage = packageLabels(files);
+  const tree = commentTree(tracked, files);
   const findings: StaleCommentFinding[] = [];
   for (const [file, content] of files) {
-    findings.push(...findStaleComments(file, content, new Set([...sqlNames, ...byPackage(file)])));
+    findings.push(...findStaleComments(file, content, new Set([...sqlNames, ...byPackage(file)]), tree));
   }
   for (const finding of findings) {
     console.error(`${finding.file}:${finding.line}: ${finding.patternClass} "${finding.match}": ${finding.text}`);

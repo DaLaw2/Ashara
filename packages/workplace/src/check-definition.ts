@@ -16,7 +16,7 @@ export interface DefinedCheck extends CheckDefinition {
 }
 
 /**
- * How Z0 runs every check (development's runSuitesOnCheckout), stated once for each brief and tool
+ * How Z0 runs every check (Quality's runSuitesOnCheckout), stated once for each brief and tool
  * that names it: a check author who guesses the shell writes checks that can never pass.
  */
 export const CHECK_RUNNER =

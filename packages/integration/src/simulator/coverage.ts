@@ -57,8 +57,8 @@ export interface Coverage {
 }
 
 /**
- * Every outcome of an acceptance sweep, by the kind Quality returns (verification.ts
- * AcceptanceSweep): `satisfies` makes the type checker refuse this list when a kind is added or
+ * Every outcome of an acceptance sweep, by the kind Quality returns (its AcceptanceSweep union):
+ * `satisfies` makes the type checker refuse this list when a kind is added or
  * removed there, so it cannot drift from the code's own union.
  */
 const SWEEP_OUTCOMES = {

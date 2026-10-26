@@ -379,8 +379,8 @@ async function exists(path: string): Promise<boolean> {
 }
 
 /**
- * Whether main has a commit yet. The project's path is recorded before its repository is made
- * (orchestrator task-helpers.ts), and a crash may land between them: no directory, a directory
+ * Whether main has a commit yet. The project's path is recorded before its repository is made,
+ * and a crash may land between them: no directory, a directory
  * with no repository, or a repository with no main are each "nothing on main yet". Every other
  * git failure throws: a corrupt or unreadable repository is never read as an empty main.
  */
@@ -447,7 +447,7 @@ export type Outcome =
  * Each project block kind's halt cause, over the code's own list (`satisfies`: a kind added there
  * fails the type check here until it is given one). `infrastructure` is the halt on the machines,
  * which the substrate probe ends; `fault` is Ashara's own record or step failing, which acceptance calls
- * undeliverable (orchestrator acceptance.ts); `configuration` (a model call refused by anything but a
+ * undeliverable; `configuration` (a model call refused by anything but a
  * spend cap) is Ashara's setup, kept with infrastructure as before. `work_budget` is the work
  * ledger's halt on a project's spent model requests, which the owner's grant
  * and the operator's unblock end. `acceptance_uncovered` is a passed sweep that leaves a guarantee
@@ -481,7 +481,7 @@ export function haltCauseOf(kind: string): HaltCause {
 
 /**
  * The recorded reason of a project that ended halted on Ashara's own fault, or null. Block kind
- * `fault` is the one production writes for its own record or step failing (shared
+ * `fault` is the one production writes for its own record or step failing (Delivery's
  * projectBlockCause): a halt no oracle judges wrong, since failing closed is right, but one a soak
  * names rather than passes in silence.
  */
@@ -510,10 +510,10 @@ export function outcomeOf(snapshot: Snapshot): Outcome {
 
 /**
  * The ashara.role labels of the cells Z0 itself runs on a task's work (Quality's verification), each with the
- * work kinds it may run on: POST_MERGE_VERIFIER_ROLE (Quality verification.ts), the post-merge check
- * of any task's tentative merge; RED_RUN_ROLE (Quality verification.ts, environment-check.ts's
+ * work kinds it may run on: POST_MERGE_VERIFIER_ROLE (Quality's verification), the post-merge check
+ * of any task's tentative merge; RED_RUN_ROLE (Quality's verification and its environment check's
  * substrate gate), a run of stored checks, a foundation build or the substrate gate in a fresh CI
- * cell; and "environment-check" (environment-check.ts), build_environment's build and probe, a
+ * cell; and "environment-check" (Quality's environment check), build_environment's build and probe, a
  * port only environment work's attempt is given. None is a roster role's id, so none is another
  * role of the team, and none is the cell the agent's own tools run in.
  */
@@ -741,8 +741,8 @@ type AddViolation = (invariant: InvariantId, key: string, statement: string) => 
 /** I2, judged on one project's snapshot. */
 function personWaitAndHaltReportViolations(snapshot: Snapshot, context: SnapshotContext, add: AddViolation): void {
   // I2: no work item waits on a person; every halt episode has exactly one report. Every exit
-  // blockedExitOf names is taken by the loop's own sweep (orchestrator parked-exits.ts, whose test
-  // names each exit's writer); a reason production cannot parse has no exit at all.
+  // blockedExitOf names is taken by the loop's own sweep of parked items, each exit with a
+  // production writer; a reason production cannot parse has no exit at all.
   for (const item of snapshot.items) {
     if (item.status !== "Blocked") continue;
     const source = sourceOf(item.blockedReason);

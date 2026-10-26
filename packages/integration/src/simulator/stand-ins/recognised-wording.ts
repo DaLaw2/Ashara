@@ -18,7 +18,7 @@ export const CORRECTION_REVISION = "changed what is built after work began";
 
 /**
  * What an honest planner reads in a repair's evidence when acceptance refused a main whose public
- * interface file is still the scaffold's: Quality's sweep states it so (verification.ts), and the
+ * interface file is still the scaffold's: Quality's acceptance sweep states it so, and the
  * planner answers it with a task of its own, since no goal task's checks ask for that file.
  */
 export const PLACEHOLDER_INTERFACE_EVIDENCE =

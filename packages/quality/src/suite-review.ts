@@ -37,7 +37,7 @@ import type { CheckTaskUnderReview, SuiteReviewProblem, TaskChecks } from "./tas
 // checks it reads. Each check is judged against the vision items its own task cites, with their
 // status, and against the product's public interface as it stood on the commit the checks were
 // written against: a reviewer that reads neither rejects checks their brief required.
-// What it finds is routed by the orchestrator (planning's exitSuiteReview), and only a finding with
+// What it finds is routed by Delivery (its exitSuiteReview), and only a finding with
 // a witness, or with another model family's agreement where no witness can exist, reopens anything.
 // A model can misread an item it was shown whole. Z0 can disprove an
 // outside-vision rejection only one way: the clause it quotes as missing appears word for word (case

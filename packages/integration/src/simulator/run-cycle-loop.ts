@@ -511,7 +511,7 @@ export class CycleLoop {
         crashed = current.handle.dead || current.handle.sigtermed;
       }
       stopIfAborted(options, state);
-      // The runner's own wait between cycles (orchestrator runner.ts defaults), on the simulated clock.
+      // The runner's own default wait between cycles, on the simulated clock.
       draws.clock.jump(ran.processed > 0 ? POLL_INTERVAL_MS : IDLE_INTERVAL_MS);
       await server.recover(current);
       const charged = await closeChargeWindow(window, state.cycles, charges);
@@ -556,7 +556,7 @@ export class CycleLoop {
   }
 
   /**
-   * One run of the live instance's cycle. The runner's own path (orchestrator runner.ts run): once a
+   * One run of the live instance's cycle, on the runner's own path: once a
    * cycle stops the loop, the process runs only halted cycles until it restarts, and its onHalt
    * removes every cell.
    */

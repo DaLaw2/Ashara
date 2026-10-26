@@ -172,7 +172,6 @@ export class VisionRepository {
       summary: current.summary,
       ...fields,
       ...columns,
-      confirmedDirections: current.confirmedDirections,
       changeReason: change.changeReason,
     });
     return { kind: "appended", version };

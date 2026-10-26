@@ -301,7 +301,8 @@ const COUNTS = ["namings", "disputes", "reviewReopens", "disputeReopens"] as con
 /**
  * W2 and W3 on one project's records, against the last snapshot's. `seen` is the highest each count
  * was ever read at (W2's restart clause); `previous` the last snapshot's records, null for the first.
- * @testseam termination.test.ts judges each clause on records it writes; TerminationWatch is its production caller
+ * @testseam termination-clauses.test.ts judges each clause on records it writes; TerminationWatch is
+ * its production caller
  */
 export function checkLoops(
   step: number,

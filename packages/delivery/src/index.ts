@@ -15,7 +15,7 @@ export { runAcceptanceSweeps } from "./acceptance.js";
 export type { TerminalSweepStore } from "./terminal-sweep.js";
 
 export { CoreLoop, concurrentTaskLanes } from "./core-loop.js";
-/** @testseam the server replan-store.test.ts sweeps a Blocked owner_unresolved row against Postgres through it; CoreLoop.runCycle is its production caller */
+/** @testseam the integration tests sweep a Blocked owner_unresolved row against Postgres through it; CoreLoop.runCycle is its production caller */
 export { releaseClearedBlocks } from "./parked-exits.js";
 /** @testseam the integration task-helpers.test.ts resolves workspaces against Postgres through it; the execution path is its production caller */
 export { resolveTargetProjectPath } from "./task-helpers.js";
@@ -43,7 +43,7 @@ export {
   takeEvents,
 } from "./domain/index.js";
 export { PlanningService } from "./domain/index.js";
-/** @testseam the integration replan-store.test.ts gives a task up against Postgres; the dispatch path is its production caller */
+/** @testseam the integration tests give a task up against Postgres through it; the dispatch path is its production caller */
 export { giveUpWorkItem } from "./domain/index.js";
 /** @testseam the integration suite-review-reopen.test.ts reopens check tasks on a real review's findings against Postgres; routeAsSuiteReview is its production caller */
 export { exitSuiteReview } from "./domain/index.js";

@@ -26,7 +26,7 @@ const taskFailedSchema = z.object({
   ...augmentationFields,
 });
 
-/** Orchestrator fallback when lifecycle route itself throws. */
+/** The contractor loop's fallback when lifecycle route itself throws. */
 const orchestratorErrorSchema = z.object({
   source: z.literal("orchestrator_error"),
   reason: z.string(),
@@ -284,7 +284,7 @@ const mergeUnrecordedSchema = z.object({
  * bound: it could not read the target's main for the task's merge commit, or could not write the
  * requeue (or completion) it found. Ashara's own Z0 machinery failed (fault class `ashara`),
  * so nothing is charged to the task. Never requeued without main read: its work may be
- * merged. Its exit is automatic (orchestrator parked-exits.ts): each cycle the loop reads main
+ * merged. Its exit is automatic, taken by the loop's sweep of parked items: each cycle the loop reads main
  * again, and the task is Completed with the merge it finds, or back to Pending when main holds
  * none. `step` names what failed, `reason` the last failure's chain.
  */
@@ -334,7 +334,7 @@ const supersededSchema = z.object({
  * latest checks of every completed implementation task on main, and they did not all pass. Written
  * on the defect item Z0 opens for that sweep, given up (Abandoned) at once, so the plan is repaired
  * around it; the project is never accepted on it. Also written when the sweep could not run for a
- * fault that is not the substrate's, within the fault budget (orchestrator acceptance.ts).
+ * fault that is not the substrate's, within the project's fault budget.
  * `mainCommit` is the commit the sweep ran on, null when it faulted before main could be read;
  * `reason` the run as its verdict states it, or the fault as recorded.
  */
@@ -366,8 +366,8 @@ const awaitingWorkSchema = z.object({
  * The task's implementer finished blocked on a decision only the client can make: the task holds at
  * Blocked until the client's answer to its question is read, its dispatch given back. `questionId`
  * is the client message the question is posted as, chosen with the hold and posted after it, with
- * `question` and what stands until it is answered (`assumption`). Its exit is automatic (orchestrator
- * parked-exits.ts): the question is posted if it is not yet on record, an answer read sends it back
+ * `question` and what stands until it is answered (`assumption`). Its exit is automatic, taken by
+ * the loop's sweep of parked items: the question is posted if it is not yet on record, an answer read sends it back
  * to Pending, and with no other work of the project left that could proceed the project halts on
  * client_wait until the answer comes. `waits` counts the waits on an owner outside the task in a
  * row, this one included.
@@ -466,7 +466,7 @@ export type MergeKind = "merged" | "already_delivered";
 /**
  * Every `source` a stored blocked reason can carry. `satisfies` keeps each member a real source;
  * blocked-reason.test.ts checks the converse, that no source is missing. The block report reads a
- * given-up task's cause by it (db block-report.ts).
+ * given-up task's cause by it.
  */
 export const BLOCKED_REASON_SOURCES = [
   "task_failed",
@@ -556,7 +556,7 @@ export function blockedReasonToRecord(reason: StoredBlockedReason): Record<strin
 /**
  * How a Blocked work item leaves Blocked (Discipline B: every state has a way out, and no work item
  * waits on a person). Every exit is taken by
- * the loop itself, each cycle (orchestrator parked-exits.ts), and each has a production writer.
+ * the loop itself, each cycle, and each has a production writer.
  * `merge-recorded`: to Completed (not Pending), once the record of `mergeCommit` is written; the
  * loop itself writes it again each cycle. `read-main`: main is read for the task's merge, then to
  * Completed with the merge found or to Pending when main holds none; main still unreadable stays

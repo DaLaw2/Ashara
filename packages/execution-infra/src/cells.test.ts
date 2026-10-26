@@ -7,7 +7,7 @@ import { cellInstanceFor, reconcileCellsAtStartup } from "./cells.js";
 import { PodmanSubstrate } from "./podman.js";
 
 /*
- * What podman removes on reconciliation is integration/execution-infra/cell.podman.test.ts's, on
+ * What podman removes on reconciliation is the integration package's to test, on
  * real cells; here only what startup adds to it, which needs no cell.
  */
 describe("reconcileCellsAtStartup", () => {

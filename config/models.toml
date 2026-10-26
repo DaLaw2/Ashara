@@ -33,7 +33,7 @@
 # every request "agent-runner" but the per-task capability ranges over
 # Light/Medium/Strong/Frontier: the planner's grade of each task's difficulty
 # or Frontier when a failed attempt escalates it
-# (server task-capability.ts) -- a flat model here would silently send a
+# -- a flat model here would silently send a
 # Frontier task to whatever the flat entry names. A table maps only the
 # levels it names; every other level takes its "default".
 #

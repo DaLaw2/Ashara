@@ -142,7 +142,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The recorded web-client session (packages/server/src/web-client.test.ts)
+      # The recorded web-client session test
       # drives headless Chromium; the build is the one the pinned playwright names.
       - name: Install headless Chromium
         run: npx playwright install --with-deps --only-shell chromium

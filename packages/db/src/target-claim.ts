@@ -4,7 +4,7 @@ import { describeErrorChain } from "@ashara/shared";
 
 /**
  * Another session holds the claim on a target checkout: a second Ashara process drives it. The
- * checkout lock that serialises finalizes is in-process only (development's withTargetCheckout),
+ * checkout lock that serialises finalizes is in-process only (execution-infra's withTargetCheckout),
  * so two processes on one checkout would abort each other's tentative merges.
  */
 export class TargetCheckoutClaimedElsewhere extends Error {

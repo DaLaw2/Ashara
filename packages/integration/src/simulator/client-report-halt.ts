@@ -47,9 +47,9 @@ const workRecord = z.strictObject({
  * fails the type check here until it is placed). `stated`: the report's cause carries the episode's
  * recorded kind and facts (causeProblems). `repair`: the report names the given-up tasks with their
  * recorded causes.
- * `retired`: check_dispute and suite_review are kinds no code path writes (shared
- * work-item-row.ts ProjectBlockCategory), and a run database starts
- * empty, so one in a run is a writer that should not exist, not a report to judge.
+ * `retired`: check_dispute and suite_review are kinds Delivery's ProjectBlockCategory keeps but no
+ * code path writes, and a run database starts empty, so one in a run is a writer that should not
+ * exist, not a report to judge.
  */
 const KIND_JUDGEMENT = {
   budget_cap: "stated",

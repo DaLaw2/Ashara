@@ -20,7 +20,7 @@ import { inertCoreLoopDeps, inertWorkItemRepo } from "./testing.js";
 type SpendCapPort = CoreLoopDeps["loop"]["spendCap"];
 
 // ---------------------------------------------------------------------------
-// Mock heavy orchestrator modules that CoreLoop.runCycle exercises. We replace
+// Mock heavy contractor-loop modules that CoreLoop.runCycle exercises. We replace
 // them with stubs so the test drives only the batch-dispatch parallelism, not
 // reconciliation or the planning gate.
 // ---------------------------------------------------------------------------

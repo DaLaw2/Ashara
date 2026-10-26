@@ -158,7 +158,7 @@ export async function routeAsGivenUp(deps: ExecutionRoutingDeps, taskId: WorkIte
 }
 
 /**
- * The exit of an item whose stored checks went stale (planning's exitStaleChecks): its check task
+ * The exit of an item whose stored checks went stale (Delivery's exitStaleChecks): its check task
  * reopened and the item back at Pending waiting on it, with the dispatch given back (no model
  * ran); or, past the rewrite bound or with a check task that cannot be reopened, the item given up
  * and its plan repaired. The check task is saved first: if that save loses a race the item is given
@@ -236,7 +236,7 @@ export async function routeAsStaleChecks(deps: ExecutionRoutingDeps, task: WorkI
 }
 
 /**
- * The exit of an item whose implementer disputed one of its stored checks (planning's
+ * The exit of an item whose implementer disputed one of its stored checks (Delivery's
  * exitDisputedCheck). The dispute is recorded first, durably: its count per check task is the
  * bound. Within it the check task is reopened with the dispute in its brief and saved first, then
  * the item is back at Pending waiting on it, its dispatch given back; past it, or with a check task
@@ -326,7 +326,7 @@ export async function routeAsDisputed(deps: ExecutionRoutingDeps, task: WorkItem
 }
 
 /**
- * The exit of a review task whose review of its plan revision's suites found problems (planning's
+ * The exit of a review task whose review of its plan revision's suites found problems (Delivery's
  * exitSuiteReview). The findings are recorded first, durably: how many reviews named each check
  * task is the bound. Within it every named check task is reopened with the problems in its brief and
  * the review returns to Pending, all in one transaction, its dispatch given back; the review's
@@ -408,7 +408,7 @@ export async function routeAsSuiteReview(deps: ExecutionRoutingDeps, task: WorkI
 }
 
 /**
- * The exit of an item whose implementer changed environment recipe files (planning's
+ * The exit of an item whose implementer changed environment recipe files (Delivery's
  * requestEnvironmentChange). How many environment tasks were already opened for it is read from
  * its dependencies, a durable count; the owner is the role doing the project's environment work.
  * Within the bound the new environment task, the item's dependency on it and the item back at
@@ -487,7 +487,7 @@ export async function routeAsEnvironmentChange(deps: ExecutionRoutingDeps, task:
 
 /**
  * The exit of an item whose implementer finished blocked on work another task of the plan delivers
- * (planning's awaitWork): the open tasks that deliver the interface entries it named are read from
+ * (Delivery's awaitWork): the open tasks that deliver the interface entries it named are read from
  * the plan, and within the bound of waits the item goes back to Pending with its dependency on each
  * written in the same transaction, its dispatch given back, so the scheduler releases it once they
  * complete. With no such task the need is a gap in the plan, and the item is given up for its plan to

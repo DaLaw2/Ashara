@@ -164,8 +164,7 @@ async function transitionByHand(patch: {
     }
     case "Pending":
       // Failed -> Pending is the FailureRouter's "replan" decision taken by hand. A Blocked task
-      // is not unblocked by hand: its exit is the loop's, each
-      // cycle (orchestrator parked-exits.ts).
+      // is not unblocked by hand: its exit is the loop's, each cycle.
       if (item.status === "Blocked") {
         return { status: 409, error: `cannot unblock ${item.id} by hand: the loop takes a Blocked task's exit by itself each cycle` };
       }

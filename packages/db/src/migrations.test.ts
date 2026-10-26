@@ -2,9 +2,11 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { copyFileSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { getTableColumns } from "drizzle-orm";
 import pg from "pg";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
+import { visionDocuments } from "./schema/engagement.js";
 import { resolveTestDatabaseUrl } from "./test-database-url.js";
 import { LEGACY_MIGRATIONS } from "./legacy-migrations.js";
 import {
@@ -329,6 +331,22 @@ describe("migrations/ holds one init equal to the numbered files it stands in fo
       ]);
       const settings = await queryOn(fresh, "SELECT to_regclass('public.system_settings') IS NULL AS gone");
       expect(settings.rows).toEqual([{ gone: true }]);
+    });
+  }, 120_000);
+
+  // A column the schema module does not declare has no reader through it: a vision version holds
+  // only what its readers judge, so confirmed_directions stays dropped.
+  test("a database built from every file holds the vision_documents columns the schema declares, and no confirmed_directions", async () => {
+    await withFreshDatabase("vision", async (fresh) => {
+      await runMigrations(fresh, MIGRATIONS_DIR);
+      const columns = await queryOn(
+        fresh,
+        "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vision_documents' ORDER BY column_name",
+      );
+      const names = z.array(z.object({ name: z.string() })).parse(columns.rows).map((row) => row.name);
+      const declared = Object.values(getTableColumns(visionDocuments)).map((column) => column.name).sort();
+      expect(names).toEqual(declared);
+      expect(names).not.toContain("confirmed_directions");
     });
   }, 120_000);
 

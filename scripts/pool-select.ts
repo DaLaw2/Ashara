@@ -1,6 +1,6 @@
 /**
- * Picks the tender a real run posts and appends the pick to the pool's ledger (scripts/pool-selection.ts states the
- * rule). An operator tool: nothing in Ashara's runtime calls it, and the pool's location is an argument or the
+ * Picks the tender a real run posts and appends the pick to the pool's ledger, by the evaluation package's pool
+ * selection rule. An operator tool: nothing in Ashara's runtime calls it, and the pool's location is an argument or the
  * ASHARA_TENDER_POOL environment variable only.
  *
  *   npx tsx scripts/pool-select.ts --run <label> --commit <sha> [--pool <dir>] [--pin <tender id> --reason <text>]

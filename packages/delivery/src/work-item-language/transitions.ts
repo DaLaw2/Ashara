@@ -2,7 +2,7 @@ import type { WorkItemStatus } from "./work-item-status.js";
 
 /**
  * Published Language: the WorkItem state-machine contract.
- * Both the domain layer (planning BC) and the persistence layer (db)
+ * Both the domain layer (Delivery) and the persistence layer (db)
  * validate against this single source of truth — neither imports the other.
  */
 
@@ -23,11 +23,11 @@ import type { WorkItemStatus } from "./work-item-status.js";
  * terminal status at all, and InProgress only in two hops (-> Failed ->
  * Abandoned). The owner's PATCH /work-items/:id/status route traverses them.
  *
- * `Completed -> Pending` has one traverser: planning's exitStaleChecks reopens a
+ * `Completed -> Pending` has one traverser: Delivery's exitStaleChecks reopens a
  * Completed check task whose stored checks went stale, pinned to work kind
  * "check" (unblock/replan/requeue each pin a different from-status).
  *
- * `Blocked -> Completed` has one traverser: planning's completeRecordedMerge, pinned to a
+ * `Blocked -> Completed` has one traverser: Delivery's completeRecordedMerge, pinned to a
  * `merge_unrecorded` block, or one whose exit to Pending reads main first and found the task's
  * merge there, for work already merged on main whose merge record is written late.
  * Unblocking such an item to Pending would re-dispatch merged work.

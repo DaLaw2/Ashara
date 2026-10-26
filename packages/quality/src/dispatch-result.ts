@@ -443,7 +443,7 @@ export interface VerificationCells {
  * check task's red run or the post-merge verifier cell could not run, or a store, git on the host
  * or Z0's own code failed at any stage.
  * It is not a task failure (re-dispatching cannot make the substrate appear),
- * so the orchestrator requeues the item uncharged within its infrastructure fault
+ * so Delivery requeues the item uncharged within its infrastructure fault
  * budget (past it the project halts under the fault's class, and a task whose faults outlast
  * the halt is given up with an `environment_unavailable` reason) instead of routing it
  * through the FailureRouter.
@@ -469,7 +469,7 @@ interface EnvironmentBlockedResult {
 /**
  * The project has no environment the task's cells could be built from (none defined on the
  * target's main, its image could not be built, or no statement of it is on record). Nothing ran;
- * the orchestrator gives the item up with an `environment_undefined` reason, for a plan repair.
+ * Delivery gives the item up with an `environment_undefined` reason, for a plan repair.
  */
 interface EnvironmentUndefinedResult {
   readonly status: "environment_undefined";
@@ -484,8 +484,8 @@ interface EnvironmentUndefinedResult {
 /**
  * A turn's model call was refused before it was sent (Finance's spend cap or price list), so the
  * attempt stopped there. Not a task failure and never a lesson, whatever refused it: a spend cap,
- * or a configuration fault (an unpriced model, a call whose cost cannot be estimated). The
- * orchestrator returns the item to Pending without consuming its dispatch and, for a
+ * or a configuration fault (an unpriced model, a call whose cost cannot be estimated).
+ * Delivery returns the item to Pending without consuming its dispatch and, for a
  * configuration fault, blocks the project with the refusal's class; no failure router either way.
  * The agent's partial work is committed on the task branch for the next dispatch, except a check
  * task's, which is discarded (its next attempt starts from main); `detail` says which.
@@ -504,7 +504,7 @@ interface RefusedResult {
 /**
  * The process's shutdown signal cancelled the attempt mid-flight, or the model call of a review of
  * a plan's suites. Not a task failure and not a
- * lesson: the work was stopped, not tried and found wanting. The orchestrator returns the item to
+ * lesson: the work was stopped, not tried and found wanting. Delivery returns the item to
  * Pending and refunds the dispatch; the partial work is committed on the task branch, or for a
  * check task discarded, and `detail` says which. A wall-clock
  * exhaustion is not this: it is the attempt's own limit and stays a failure.
@@ -523,7 +523,7 @@ interface InterruptedResult {
  * A turn of the attempt did not fit its model's context window (the attempt's
  * `context_budget_exceeded`): the gateway's projection exceeded the window less the output reserve,
  * or the provider rejected the request as longer than it. Deterministic, so the same model would
- * overflow again. Not the task's failure and no lesson: the orchestrator dispatches the task next
+ * overflow again. Not the task's failure and no lesson: Delivery dispatches the task next
  * on `wider`, a catalog model whose window is larger, or, with none, gives it up naming the window
  * and the estimate; never through the FailureRouter, whose replan would run the same model into the
  * same window (reaching a bound escalates). The partial work is committed on the task branch for the next dispatch,
@@ -554,8 +554,8 @@ interface ContextExceededResult {
  * The task's stored checks were red-run on another environment version and on the dispatch's no
  * longer all fail on main, nor all pass there (that is work already delivered): they cannot
  * decide its work. Not the implementer's failure (no model ran)
- * and no lesson: the orchestrator reopens the check task that must write them again and the item
- * waits on it (planning's exitStaleChecks, bounded by `revision`), never routes it through the
+ * and no lesson: Delivery reopens the check task that must write them again and the item
+ * waits on it (Delivery's exitStaleChecks, bounded by `revision`), never routes it through the
  * FailureRouter, whose replan would meet the same checks.
  */
 interface ChecksStaleResult {
@@ -572,7 +572,7 @@ interface ChecksStaleResult {
 
 /**
  * The implementer disputed one of the task's stored checks with dispute_check: it holds that the check cannot pass on correct work. Not the task's failure and no
- * lesson: the orchestrator reopens the check task that wrote it, with the dispute in its brief, and
+ * lesson: Delivery reopens the check task that wrote it, with the dispute in its brief, and
  * the item waits on it (bounded per check task), never routing it through the FailureRouter. The
  * partial work is committed on the task branch for the next dispatch.
  */
@@ -604,7 +604,7 @@ interface DisputedResult {
  * refuses: it needs an environment change, which only the platform role makes.
  * Nothing was merged, and the task branch is deleted, so the task's next
  * dispatch starts a fresh branch from main once the environment has changed. Not the task's
- * failure and no lesson: the orchestrator opens an environment task carrying `need` and `diff`
+ * failure and no lesson: Delivery opens an environment task carrying `need` and `diff`
  * and the item waits on it (bounded per implementation task), never routing it through the
  * FailureRouter.
  */
@@ -625,7 +625,7 @@ interface EnvironmentChangeRequestedResult {
 
 /**
  * The task has no owner role, or its owner is not in the project's latest roster. Nothing ran;
- * the orchestrator gives the item up with an `owner_unresolved` reason, for a plan repair.
+ * Delivery gives the item up with an `owner_unresolved` reason, for a plan repair.
  */
 interface OwnerUnresolvedResult {
   readonly status: "owner_unresolved";
@@ -643,7 +643,7 @@ interface OwnerUnresolvedResult {
 /**
  * An attempt of the task overflowed a context window of `overflowedWindowTokens`, and no catalog
  * model graded for it has a larger one when it is dispatched again (the catalog changed since the
- * overflow found one). Nothing ran; the orchestrator gives the item up with a `no_wider_model`
+ * overflow found one). Nothing ran; Delivery gives the item up with a `no_wider_model`
  * reason, for a plan repair that can cut the work smaller.
  */
 interface NoWiderModelResult {
@@ -660,7 +660,7 @@ interface NoWiderModelResult {
  * The review of a plan revision's suites found problems: checks no
  * product can pass together, or checks of behaviour no vision item asks for. Its schema validated
  * and every check task it names is one whose suite it read. Not the review's failure and no lesson:
- * the orchestrator records the findings, reopens each named check task with them (bounded per check
+ * Delivery records the findings, reopens each named check task with them (bounded per check
  * task) and returns the review to Pending to read the new suites, never routing it through the
  * FailureRouter.
  */
@@ -676,7 +676,7 @@ interface SuiteReviewProblemsResult {
 
 /**
  * The implementer finished blocked on work another task of the plan delivers, naming the public
- * interface entries it needs. Not the task's failure and no lesson: the orchestrator makes the item
+ * interface entries it needs. Not the task's failure and no lesson: Delivery makes the item
  * wait on the open tasks that deliver those entries, its dispatch given back, never routing it
  * through the FailureRouter; with no such task the need is a gap in the plan, which is repaired.
  * The partial work is committed on the task branch for the next dispatch.
@@ -698,7 +698,7 @@ interface PrerequisiteNeededResult {
 
 /**
  * The implementer finished blocked on a decision only the client can make (a contradiction in the
- * tender, a choice it leaves open). Not the task's failure and no lesson: the orchestrator sends the
+ * tender, a choice it leaves open). Not the task's failure and no lesson: Delivery sends the
  * question to the client and the item holds until it is answered, its dispatch given back, never
  * routing it through the FailureRouter.
  */
@@ -766,7 +766,7 @@ interface AgentExecutionResult {
   readonly sessionId: string;
   /**
    * The item's dispatch ordinal (DispatchRef.attempt). execute() makes exactly one agent
-   * invocation per call; retrying a failed task is the orchestrator's FailureRouter's job.
+   * invocation per call; retrying a failed task is Delivery's FailureRouter's job.
    */
   readonly attempt: number;
   readonly errorEnvelope?: ErrorEnvelope;
@@ -774,7 +774,7 @@ interface AgentExecutionResult {
 
 /**
  * What a completed task delivered. A merging task's record is the merge commit Z0 made on main,
- * which the orchestrator records on the work item before completing it; a check task merges
+ * which Delivery records on the work item before completing it; a check task merges
  * nothing, it records checks for the task they decide.
  */
 type Delivery =

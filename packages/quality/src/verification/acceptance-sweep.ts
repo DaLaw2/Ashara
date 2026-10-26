@@ -318,7 +318,7 @@ export class AcceptanceSweeper {
    * and saw pass (`checkOutcomes`). A main with no environment its cells can be built from fails the sweep, with the
    * reason. A sweep that could not run is `unrunnable` only when the substrate failed (its probe, or
    * an EnvironmentError); any other error is `faulted`, with the step it stopped at. The caller
-   * bounds both (orchestrator acceptance.ts).
+   * bounds both within the project's fault budget.
    */
   async sweepForAcceptance(
     projectId: ProjectId,

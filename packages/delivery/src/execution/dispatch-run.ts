@@ -97,7 +97,7 @@ async function salvagePreemptedResult(
     if (!item.blockedReason) {
       // The item reached Abandoned with no recorded reason — a data integrity
       // gap, not an expected state. Construct a minimal reason so the returning
-      // result is not discarded. orchestrator_error is truthful: the orchestrator
+      // result is not discarded. orchestrator_error is truthful: Delivery's own loop
       // detected the gap, and the reason text states what happened without
       // asserting a cause we do not know.
       deps.logger.error(
@@ -401,7 +401,7 @@ async function recoverFailedResult(deps: DispatchRunDeps, current: WorkItem, exe
   // Every FailureRouter decision here (replan/abandon) means
   // this dispatch attempt did not succeed: capture it as a
   // failed_approaches lesson so a later brief sees WHY, closing the gap
-  // where only a THROWN orchestrator error (the catch block below) ever
+  // where only an error Ashara's own code THREW (the catch block below) ever
   // reached recordFailedApproach. This is the ONLY call site that writes
   // for the typed-failed-results path — the catch block's own
   // recoverFailedItem call does not, so a thrown error never
@@ -440,7 +440,7 @@ async function handleTaskError(deps: DispatchRunDeps, task: WorkItem, verdict: F
 }
 
 /**
- * Recovers from a THROWN orchestrator error during `processTask` (as opposed to a typed TaskResult,
+ * Recovers from an error Ashara's own code THREW during `processTask` (as opposed to a typed TaskResult,
  * which processTask routes itself, its own throws included): the throw is Ashara's own fault, never
  * the task's work, so no lesson is written for it. An item left InProgress is
  * requeued uncharged as Ashara's fault (counted on its fault budget), its dispatch given back with
@@ -457,14 +457,14 @@ export async function handleProcessingError(
 ): Promise<TaskResult> {
   const dispatch = thrown instanceof CountedDispatchThrew ? "counted" : "not-counted";
   const error = thrown instanceof CountedDispatchThrew ? thrown.thrown : thrown;
-  deps.loop.logger.error("delivery.processing-failed", `task processing failed with orchestrator error (dispatch ${dispatch})`, { taskId: task.id, dispatch }, error);
+  deps.loop.logger.error("delivery.processing-failed", `task processing failed with an error of Ashara's own (dispatch ${dispatch})`, { taskId: task.id, dispatch }, error);
   const fault = asharaFaultOf(error, "process the task");
 
   try {
     await haltOnProjectRefusal(deps.loop, task, error);
     const current = await PlanningService.findWorkItem(deps.loop.workItemRepo, task.id);
     if (!current) {
-      deps.loop.logger.warn("delivery.item-vanished", "work item vanished during orchestrator error recovery; item left for startup reconciler", { taskId: task.id });
+      deps.loop.logger.warn("delivery.item-vanished", "work item vanished during recovery from an error of Ashara's own; item left for startup reconciler", { taskId: task.id });
     } else {
       // Exhaustive over WorkItemStatus so a new member is a compile error here, not a silent skip.
       switch (current.status) {
@@ -504,8 +504,8 @@ export async function handleProcessingError(
       }
     }
   } catch (recoveryError) {
-    // eslint-disable-next-line ashara/catch-continue -- best effort: the recovery of a thrown orchestrator error failed: the item stays InProgress, the crash-orphan state the startup reconciler settles from main, and the result returned is interrupted, never a success
-    deps.loop.logger.error("delivery.recovery-failed", "recovery after orchestrator error failed; item left for the startup reconciler", { taskId: task.id }, recoveryError);
+    // eslint-disable-next-line ashara/catch-continue -- best effort: the recovery from an error Ashara's own code threw failed: the item stays InProgress, the crash-orphan state the startup reconciler settles from main, and the result returned is interrupted, never a success
+    deps.loop.logger.error("delivery.recovery-failed", "recovery after an error of Ashara's own failed; item left for the startup reconciler", { taskId: task.id }, recoveryError);
   }
 
   return { taskId: task.id, status: "interrupted", detail: fault.reason };

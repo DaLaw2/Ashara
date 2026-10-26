@@ -508,7 +508,7 @@ export async function ensureTargetGitInit(targetProjectPath: string, workdirBase
   }
 }
 
-/** A refused target workspace: the orchestrator blocks the project's item on it before dispatch. */
+/** A refused target workspace: Delivery blocks the project's item on it before dispatch. */
 export class InvalidTargetProjectPath extends Error {
   constructor(
     public readonly path: string,

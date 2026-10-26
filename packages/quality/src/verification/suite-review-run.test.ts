@@ -29,7 +29,7 @@ describe("SuiteReviewRun", () => {
     expect(events.map((event) => event.event)).toEqual(["suites_reviewed"]);
   });
 
-  test("problems are returned for the orchestrator to route, naming each check task", async () => {
+  test("problems are returned for Delivery to route, naming each check task", async () => {
     const { job } = run(async () => ({
       ...reviewed,
       kind: "problems",

@@ -423,7 +423,7 @@ describe("independent verification", () => {
     expect(await checkRowsOf(vacuous.implementation.id)).toEqual([]);
     expect(await git("branch", "--list", `check/${vacuous.check.id}`)).toBe("");
 
-    // The retry's actual brief, from the envelope as the orchestrator stores it for a replan
+    // The retry's actual brief, from the envelope as the contractor loop stores it for a replan
     // (dispatch-run.ts raw, failure-recovery.ts replanContext): it renders the chain, and names no commit.
     const retry = await runTask(
       {
@@ -565,7 +565,7 @@ describe("independent verification", () => {
 
 // A merge is checked against every stored suite, not only its own task's checks.
 describe("post-merge regression suite", () => {
-  /** What the orchestrator does on a completed result. */
+  /** What the contractor loop does on a completed result. */
   async function markCompleted(taskId: WorkItemId): Promise<void> {
     await db.execute(sql`UPDATE work_items SET status = 'Completed', updated_at = now() WHERE id = ${taskId}`);
   }

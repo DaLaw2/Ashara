@@ -140,7 +140,7 @@ export interface TaskDescriptor {
    */
   readonly dispatchCount: number;
   /**
-   * This dispatch's ordinal: work_items.dispatch_count as the orchestrator's dispatch seam left
+   * This dispatch's ordinal: work_items.dispatch_count as the contractor loop's dispatch seam left
    * it (incrementDispatchCount's return), so every event and result of the dispatch names it.
    * A refunded dispatch (a spend-cap refusal, a shutdown) gives its number to the next one.
    */

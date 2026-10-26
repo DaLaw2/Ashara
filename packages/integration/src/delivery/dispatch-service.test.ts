@@ -666,7 +666,7 @@ describe("a dispatch that cannot run in a cell ends before anything runs", () =>
   });
 
   // A catalog with no window larger than one the task overflowed is a typed result
-  // the orchestrator gives the task up on, never a throw routed as Ashara's fault.
+  // the contractor loop gives the task up on, never a throw routed as Ashara's fault.
   test("no catalog model wider than the task's overflow: no_wider_model; no worktree, no cell, no model, no session", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const root = await realpath(await mkdtemp(join(tmpdir(), "ashara-nowider-")));
@@ -858,7 +858,7 @@ describe("a substrate failure at any stage blocks the task on the environment", 
     readonly shutdownDuringSecondTurn?: AbortController;
     /** The attempt's wall clock is past its limit once the first turn, which wrote greet.txt, returns. */
     readonly wallClockRunsOutAfterFirstTurn?: boolean;
-    /** The dispatch's ordinal, as the orchestrator's dispatch seam counted it; 1 when absent. */
+    /** The dispatch's ordinal, as the contractor loop's dispatch seam counted it; 1 when absent. */
     readonly attempt?: number;
     /** Files the agent's first turn writes beside greet.txt, by path. */
     readonly agentAlsoWrites?: Readonly<Record<string, string>>;

@@ -22,7 +22,7 @@ interface FailureRouteCommon {
   readonly item: FailureRouterItem;
   readonly failure: RawFailureContext;
   /**
-   * How many dispatch attempts have been made for this item so far. The orchestrator
+   * How many dispatch attempts have been made for this item so far. The contractor loop
    * sources this from the WorkItem's dispatch counter, which is
    * incremented at the dispatch seam — so by recovery time it already includes the
    * attempt that just failed. The router replans while this is under the bound, so a
@@ -40,7 +40,7 @@ type FailureRouteInput = FailureRouteCommon & { readonly verdict: FailureVerdict
 
 /**
  * A typed recovery decision. Every branch carries the raw failure context so the
- * orchestrator can attach it to the mutated record (replan) or the terminal
+ * contractor loop can attach it to the mutated record (replan) or the terminal
  * reason (abandon) — the context never gets dropped at the boundary.
  */
 export type FailureDecision =

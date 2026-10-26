@@ -221,8 +221,8 @@ export function holdForCorrection(item: WorkItem, hold: CorrectionHoldOf): void 
 }
 
 /**
- * Returns a Blocked item to Pending once its automatic exit has cleared (orchestrator
- * parked-exits.ts); no person unblocks a task. Pins its
+ * Returns a Blocked item to Pending once its automatic exit has cleared, which the loop's sweep of
+ * parked items decides each cycle; no person unblocks a task. Pins its
  * from-status to `Blocked` EXPLICITLY: several statuses share the `-> Pending` graph edge
  * (Blocked, Failed, InProgress), but each is owned by a distinct method with its own domain event
  * and intent. canTransitionTo is only the edge-level guard (enforced again at save()); the method
@@ -308,8 +308,8 @@ export function replanWorkItem(item: WorkItem, replanContext: ReplanContext | nu
 
 /**
  * Moves an item to the terminal Abandoned status. Which statuses may reach
- * Abandoned is governed solely by `canTransitionTo` and the transition table
- * in `work-item-language/transitions.ts` — this function delegates to it and
+ * Abandoned is governed solely by `canTransitionTo` and the work-item language's
+ * transition table — this function delegates to it and
  * adds no further guard. Callers include the FailureRouter (Failed →
  * Abandoned) and the HTTP PATCH /work-items/:id/status route, which
  * is the only caller that takes Blocked, Pending or InProgress to Abandoned.
