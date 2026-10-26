@@ -175,15 +175,27 @@ jobs:
 
       # The step exports TMPDIR from the scratch-root resolver as `just test` does (the suite's
       # globalSetup pins it too); a runner without a tmpfs with room fails here naming why. The suite
-      # runs through scripts/test-run.ts, as `just test` does, under the bound derived from its files
-      # and the workers named here (this runner's cores), and SIGKILL its grace later; this step's cap
-      # is above both.
+      # runs through scripts/test-run.ts, as `just test` does, on as many workers as this runner has
+      # vCPUs, under the bound derived from its files at the figures measured on this runner
+      # (--profile=ci), and SIGKILL its grace later. --within is this step's cap less the time the
+      # run's plan takes: a bound that with its grace would outrun the cap fails before any test,
+      # naming both, rather than be cut off by the cap with no unfinished file named. Each file's wall
+      # time on this runner goes to test-durations.jsonl, uploaded below, the measurement the ci
+      # profile is derived from (scripts/test-run-profile.ts).
       - name: Test suite
         timeout-minutes: 30
         run: |
           TMPDIR="$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts)"
           export TMPDIR
-          npx tsx scripts/test-run.ts -- --maxWorkers=4 --reporter=default --reporter=json --outputFile=vitest-results.json
+          echo "test-run: this runner has $(nproc) vCPU(s)"
+          npx tsx scripts/test-run.ts --profile=ci --within=1680 --durations=test-durations.jsonl -- --maxWorkers=$(nproc) --reporter=default --reporter=json --outputFile=vitest-results.json
+
+      - name: Upload per-file wall times
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-durations
+          path: test-durations.jsonl
+          if-no-files-found: error
 
       # vitest exits non-zero on a failed test, a suite that fails to collect,
       # or zero test files, but exits 0 with skipped tests; this step closes that.

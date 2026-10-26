@@ -74,11 +74,15 @@ test-images:
     timeout 1200 npx tsx packages/integration/src/test-images-pull.ts
 
 # The whole suite, or the files its vitest arguments filter, bounded by a wall time derived from the
-# files vitest selects and the workers it runs them on (scripts/test-run.ts states the rule and the
-# stop past it); a run cut off by its bound exits 124 naming the bound and every test file it did not finish.
+# files vitest selects and the workers it runs them on, at the figures measured on the development
+# host (scripts/test-run.ts states the rule and the stop past it); a run cut off by its bound exits
+# 124 naming the bound and every test file it did not finish. Each argument reaches vitest as given,
+# so a quoted test name with spaces stays one argument.
 # Example: just test
 #          just test -- --maxWorkers=2
 #          just test -- scripts/test-run
+#          just test -- -t "a test name"
+[positional-arguments]
 test *ARGS: _test-db-ready
     #!/usr/bin/env bash
     set -u
@@ -87,7 +91,7 @@ test *ARGS: _test-db-ready
     # store follows vitest.config.mts (useTestPodmanStore), so a direct `npx vitest` gets it too.
     scratch=$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts) || exit 1
     export TMPDIR="$scratch"
-    exec npx tsx scripts/test-run.ts {{ARGS}}
+    exec npx tsx scripts/test-run.ts --profile=dev "$@"
 
 # Runs only the test files a change against <base> can affect (scripts/affected-tests.ts states the
 # selection rules and their blind spots); `just test` stays the full suite the merge lane runs.
@@ -95,13 +99,16 @@ test *ARGS: _test-db-ready
 # Example: just test-affected origin/master --list
 #          just test-affected origin/master -- --maxWorkers=2
 # Bounded as `test` is, by a wall time derived from the selection and the workers it runs on, so a
-# whole-suite selection gets the whole suite's bound. `--list` runs no test, so it needs no test
-# database.
+# whole-suite selection gets the whole suite's bound, at the figures measured on the development host.
+# `--list` runs no test, so it needs no test database. Each argument reaches vitest as given.
+[positional-arguments]
 test-affected base *ARGS:
     #!/usr/bin/env bash
     set -u
+    base="$1"
+    shift
     listing=0
-    for arg in {{ARGS}}; do
+    for arg in "$@"; do
       [ "$arg" = "--" ] && break
       [ "$arg" = "--list" ] && listing=1
     done
@@ -110,7 +117,7 @@ test-affected base *ARGS:
     # ASHARA_SCRATCH_ROOT names another), or the recipe stops naming why it cannot.
     scratch=$(node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/scratch-root.ts) || exit 1
     export TMPDIR="$scratch"
-    exec npx tsx scripts/affected-tests.ts {{base}} {{ARGS}}
+    exec npx tsx scripts/affected-tests.ts "$base" --profile=dev "$@"
 
 # The lifecycle simulator's soak tier: consecutive seeds, each
 # on its own scratch database `ashara_sim_*` on the server of SIM_DATABASE_URL (default the test

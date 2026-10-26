@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { boundSelection, parseNameStatus, repositorySources, selectTests, WHOLE_SUITE_RULES, type BoundedRun, type ChangedPath, type Selection, type SelectionSources } from "./affected-tests.js";
 import { isCheckoutSource } from "./module-program.js";
-import { BOUND_MARGIN, MEASURED_SUITE, runBound, SIMULATOR_DIR, type SuiteFile } from "./test-run-budget.js";
+import { BOUND_MARGIN, BUDGET_PROFILES, runBound, SIMULATOR_DIR, type SuiteFile } from "./test-run-budget.js";
 import { boundedRun, planRun } from "./test-run.js";
 
 const REPO = path.join(import.meta.dirname, "..");
@@ -604,7 +604,7 @@ describe("a planted break in a scratch repository", () => {
 
   test("a harmless change to the leaf selects the test two imports away, and the run passes", async () => {
     await write("packages/leaf/src/double.ts", `// harmless\n${LEAF}`);
-    const run = await runCli("main");
+    const run = await runCli("main", "--profile=dev");
     expect(run.output).toContain("selected: 1 of 2 test files");
     expect(run.output).toContain("packages/top/src/top.test.ts");
     expect(run.code, run.output).toBe(0);
@@ -612,7 +612,7 @@ describe("a planted break in a scratch repository", () => {
 
   test("a break planted in the leaf is selected and fails the selected run", async () => {
     await write("packages/leaf/src/double.ts", 'export function double(): number {\n  throw new Error("planted break");\n}\n');
-    const run = await runCli("main");
+    const run = await runCli("main", "--profile=dev");
     expect(run.output).toContain("packages/top/src/top.test.ts");
     expect(run.output).not.toMatch(/^ {2}packages\/other\/src\/other\.test\.ts$/m);
     expect(run.output).toContain("planted break");
@@ -646,23 +646,23 @@ describe("a planted break in a scratch repository", () => {
 // is stopped and fails naming the bound and each file it did not finish, never a pass.
 describe("a run's wall bound", () => {
   test("grows with the selection and shrinks with the workers, and the whole suite at 2 workers gets at least its measured per-file wall times its files over its workers, with margin", async () => {
-    const whole = (await planRun(REPO, [], ["--maxWorkers=2"])).files;
-    const atTwo = runBound(whole);
-    const measuredPerFile = MEASURED_SUITE.fileWallS / MEASURED_SUITE.files;
+    const whole = (await planRun(REPO, [], ["--maxWorkers=2"], "dev")).files;
+    const atTwo = runBound(whole, "dev");
+    const measuredPerFile = BUDGET_PROFILES.dev.suite.fileWallS / BUDGET_PROFILES.dev.suite.files;
     expect(atTwo.seconds).toBeGreaterThanOrEqual(((measuredPerFile * whole.length) / 2) * BOUND_MARGIN);
-    expect(runBound((await planRun(REPO, [], ["--maxWorkers=3"])).files).seconds).toBeLessThan(atTwo.seconds);
-    expect(runBound(whole.slice(0, Math.floor(whole.length / 2))).seconds).toBeLessThan(atTwo.seconds);
+    expect(runBound((await planRun(REPO, [], ["--maxWorkers=3"], "dev")).files, "dev").seconds).toBeLessThan(atTwo.seconds);
+    expect(runBound(whole.slice(0, Math.floor(whole.length / 2)), "dev").seconds).toBeLessThan(atTwo.seconds);
     expect(atTwo.rule).toContain(`${whole.length} test file(s)`);
     const simulator = whole.filter((file) => file.path.startsWith(SIMULATOR_DIR));
     expect(simulator.length).toBeGreaterThan(0);
     const others = whole.filter((file) => file.project !== "podman" && !file.path.startsWith(SIMULATOR_DIR)).slice(-simulator.length);
-    expect(runBound(simulator).seconds).toBeGreaterThan(runBound(others).seconds);
+    expect(runBound(simulator, "dev").seconds).toBeGreaterThan(runBound(others, "dev").seconds);
   });
 
   test("a sequence group whose files name different worker counts has no bound: vitest runs a group on one count", () => {
     const file = (name: string, workers: number): SuiteFile => ({ path: name, project: "default", group: 0, workers });
-    expect(() => runBound([file("a.test.ts", 2), file("b.test.ts", 3)])).toThrow(/runs a group on one count/);
-    expect(() => runBound([file("a.test.ts", 0)])).toThrow(/not a whole number of workers/);
+    expect(() => runBound([file("a.test.ts", 2), file("b.test.ts", 3)], "dev")).toThrow(/runs a group on one count/);
+    expect(() => runBound([file("a.test.ts", 0)], "dev")).toThrow(/not a whole number of workers/);
   });
 
   test("a run that ends within its bound exits as it ended", async () => {

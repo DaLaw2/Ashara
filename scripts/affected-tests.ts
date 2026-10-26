@@ -1,12 +1,13 @@
 /**
  * Affected-test selection: lists the test files a change can affect and runs exactly those.
  *
- * Usage: npx tsx scripts/affected-tests.ts <base> [--head <rev>] [--list] [-- <vitest run args>]
+ * Usage: npx tsx scripts/affected-tests.ts <base> [--head <rev>] (--list | --profile=<host>) [-- <vitest run args>]
  *
  * The change is every file that differs between the merge base of <base> and HEAD and the working
  * tree, untracked files included; with --head, between that merge base and <rev>, the working tree
  * not read. --list prints the selection and runs nothing. Otherwise the selection runs as one
- * `vitest run` and this script exits with its exit code. The repo root is the working directory.
+ * `vitest run`, bounded by the figures of the host --profile names (test-run.ts), and this script
+ * exits with its exit code. The repo root is the working directory.
  *
  * No bound trims a selection: every test file it names runs, whatever their number, and a
  * whole-suite selection runs the full suite. A run that sheds selected tests is a weaker check, not a
@@ -85,7 +86,7 @@ import { describeErrorChain } from "@ashara/shared";
 import { importReader } from "./import-targets.js";
 import { forgetPrograms, isCheckoutSource } from "./module-program.js";
 import { lockfileImpact, manifestImpact, parseLockfile, type DependencyImpact, type Lockfile } from "./lockfile-impact.js";
-import { SIMULATOR_DIR } from "./test-run-budget.js";
+import { isBudgetProfileName, SIMULATOR_DIR, type BudgetProfileName } from "./test-run-budget.js";
 import { runTests } from "./test-run.js";
 
 class AffectedTestsError extends Error {
@@ -618,7 +619,8 @@ export async function repositorySources(root: string, revisions: Revisions): Pro
 interface Cli {
   readonly base: string;
   readonly head: string | undefined;
-  readonly list: boolean;
+  /** The host whose figures bound the run; none for a listing, which runs nothing. */
+  readonly run: { readonly kind: "list" } | { readonly kind: "run"; readonly profile: BudgetProfileName };
   readonly vitestArgs: readonly string[];
 }
 
@@ -629,17 +631,22 @@ function parseCli(argv: readonly string[]): Cli {
   let base: string | undefined;
   let head: string | undefined;
   let list = false;
+  let profile: BudgetProfileName | undefined;
   for (let i = 0; i < own.length; i++) {
     const arg = own[i];
+    const named = arg?.startsWith("--profile=") === true ? arg.slice("--profile=".length) : undefined;
     if (arg === "--list") list = true;
+    else if (named !== undefined && isBudgetProfileName(named)) profile = named;
     else if (arg === "--head") {
       head = own[++i];
       if (head === undefined) throw new AffectedTestsError("--head", "needs a revision");
     } else if (arg !== undefined && !arg.startsWith("-") && base === undefined) base = arg;
-    else throw new AffectedTestsError("arguments", `unexpected ${String(arg)}; usage: affected-tests.ts <base> [--head <rev>] [--list] [-- <vitest run args>]`);
+    else throw new AffectedTestsError("arguments", `unexpected ${String(arg)}; usage: affected-tests.ts <base> [--head <rev>] (--list | --profile=<host>) [-- <vitest run args>]`);
   }
-  if (base === undefined) throw new AffectedTestsError("arguments", "a base revision is required; usage: affected-tests.ts <base> [--head <rev>] [--list] [-- <vitest run args>]");
-  return { base, head, list, vitestArgs };
+  if (base === undefined) throw new AffectedTestsError("arguments", "a base revision is required; usage: affected-tests.ts <base> [--head <rev>] (--list | --profile=<host>) [-- <vitest run args>]");
+  if (list) return { base, head, run: { kind: "list" }, vitestArgs };
+  if (profile === undefined) throw new AffectedTestsError("arguments", `a run needs --profile=<host>, the host whose figures bound it (test-run-budget.ts BUDGET_PROFILES); usage: affected-tests.ts <base> [--head <rev>] (--list | --profile=<host>) [-- <vitest run args>]`);
+  return { base, head, run: { kind: "run", profile }, vitestArgs };
 }
 
 /**
@@ -676,12 +683,12 @@ async function main(): Promise<number> {
   }
   if (run.kind === "whole-suite") {
     console.log(run.notice);
-    return cli.list ? 0 : runTests(root, [], cli.vitestArgs);
+    return cli.run.kind === "list" ? 0 : runTests(root, [], cli.vitestArgs, { profile: cli.run.profile });
   }
   if (run.notice !== undefined) console.log(run.notice);
   console.log(`runs: ${run.tests.length} test files`);
   for (const t of run.tests) console.log(`  ${t}`);
-  return cli.list ? 0 : runTests(root, run.tests, cli.vitestArgs);
+  return cli.run.kind === "list" ? 0 : runTests(root, run.tests, cli.vitestArgs, { profile: cli.run.profile });
 }
 
 if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

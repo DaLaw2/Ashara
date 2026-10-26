@@ -7,14 +7,16 @@
  * measured per-file wall times, heaviest first: a selection of k files of a class is budgeted the
  * sum of the k heaviest, each file past the measured list at the mean of the rest, so a selection
  * of the slow files of a class is never budgeted as an average one. vitest runs its sequence groups
- * one after the other, each on the workers vitest resolves for it (its projects' own maxWorkers, else
- * the run's), so a group's wall is at most its files' sum over its workers plus its longest file
- * (list scheduling leaves no worker idle while a file waits); the bound is the run's fixed overhead
- * plus BOUND_MARGIN times the sum of the groups' walls.
+ * one after the other, each on the workers vitest resolves for it (a project's own maxWorkers, held
+ * under the run's by vitest.config.mts, else the run's), so a group's wall is at most its files' sum
+ * over its workers plus its longest file (list scheduling leaves no worker idle while a file waits);
+ * the bound is the run's fixed overhead plus BOUND_MARGIN times the sum of the groups' walls.
  *
- * Every per-file figure is the larger of two whole-suite runs' measured wall times for that rank,
- * one at 2 workers and one at 3, under MemoryMax=8G CPUQuota=400%; a figure a class outgrows shows
- * as a run cut off at its bound naming the files it did not finish, never as a pass.
+ * A per-file wall time is a property of the host that ran the file as much as of the file: the same
+ * suite takes different times on hosts of different cores, disks and contention. So the figures are
+ * kept per host (BUDGET_PROFILES), each measured on the host that enforces the bounds derived from
+ * it, and every run names the profile of its host. A figure a class outgrows shows as a run cut off
+ * at its bound naming the files it did not finish, never as a pass.
  */
 
 class TestRunBudgetError extends Error {
@@ -48,20 +50,54 @@ interface ClassBudget {
   readonly restMeanS: number;
 }
 
-type FileClass = "podman" | "simulator" | "other";
+export type FileClass = "podman" | "simulator" | "other";
+
+/** The per-file figures measured on one host, with the suite and the worker counts they were measured at. */
+interface BudgetProfile {
+  /** The host the figures were measured on, and what each figure counts. */
+  readonly measuredOn: string;
+  /** The workers of the whole-suite runs measured; each figure is the larger of those runs' for its rank. */
+  readonly workers: readonly number[];
+  /** The suite as measured: its test files and the sum of their wall times, so its mean is the measured per-file budget. */
+  readonly suite: { readonly files: number; readonly fileWallS: number };
+  readonly classes: Readonly<Record<FileClass, ClassBudget>>;
+}
 
 /**
- * The whole suite as the class budgets were measured on: its test files and the larger of the two
- * runs' sums of their wall times, so its mean is the measured per-file budget.
- * @testseam affected-tests.test.ts holds a whole-suite bound to it
+ * The per-file figures of each host a bounded run is enforced on. `scripts/test-run-profile.ts`
+ * derives a profile's classes from the per-file wall times a run on that host records.
  */
-export const MEASURED_SUITE = { files: 327, fileWallS: 2741 } as const;
+export const BUDGET_PROFILES = {
+  dev: {
+    measuredOn: "the development host, each file's wall time, under MemoryMax=8G CPUQuota=400%",
+    workers: [2, 3],
+    suite: { files: 327, fileWallS: 2741 },
+    classes: {
+      podman: { heaviestS: [128, 96, 79, 53, 38, 31, 30, 10, 8, 4], restMeanS: 1.6 },
+      simulator: { heaviestS: [146, 145, 123, 121, 119, 116, 112, 99, 96, 91], restMeanS: 18.9 },
+      other: { heaviestS: [127, 69, 27, 24, 19, 15, 14, 14, 13, 11], restMeanS: 0.9 },
+    },
+  },
+  ci: {
+    measuredOn:
+      "CI's ubuntu-24.04 runner, each file's test time as vitest's default reporter logs it plus an equal share of the run's import and transform time",
+    workers: [4],
+    suite: { files: 327, fileWallS: 2394 },
+    classes: {
+      podman: { heaviestS: [100.9, 88.3, 67.5, 38.1, 22.9, 22.6, 19.9, 7.8, 6, 4.5], restMeanS: 2.2 },
+      simulator: { heaviestS: [91.2, 79.5, 69, 67.3, 60.4, 59.8, 58.5, 56.3, 56.1, 52.6], restMeanS: 15.2 },
+      other: { heaviestS: [160.2, 55.7, 36.8, 33.5, 23, 22.9, 18.9, 16.8, 12.1, 12], restMeanS: 2 },
+    },
+  },
+} as const satisfies Readonly<Record<string, BudgetProfile>>;
 
-const CLASS_BUDGETS: Readonly<Record<FileClass, ClassBudget>> = {
-  podman: { heaviestS: [128, 96, 79, 53, 38, 31, 30, 10, 8, 4], restMeanS: 1.6 },
-  simulator: { heaviestS: [146, 145, 123, 121, 119, 116, 112, 99, 96, 91], restMeanS: 18.9 },
-  other: { heaviestS: [127, 69, 27, 24, 19, 15, 14, 14, 13, 11], restMeanS: 0.9 },
-};
+/** The name of a host whose per-file figures BUDGET_PROFILES holds. */
+export type BudgetProfileName = keyof typeof BUDGET_PROFILES;
+
+/** Whether `name` names a host whose per-file figures BUDGET_PROFILES holds. */
+export function isBudgetProfileName(name: string): name is BudgetProfileName {
+  return Object.hasOwn(BUDGET_PROFILES, name);
+}
 
 /**
  * What every run spends outside its test files, in seconds: globalSetup's guards and migration, and
@@ -74,7 +110,8 @@ const RUN_OVERHEAD_S = 240;
  */
 export const BOUND_MARGIN = 1.25;
 
-function classOf(file: SuiteFile): FileClass {
+/** The class a test file is budgeted by. */
+export function classOf(file: { readonly path: string; readonly project: string }): FileClass {
   if (file.project === "podman") return "podman";
   return file.path.startsWith(SIMULATOR_DIR) ? "simulator" : "other";
 }
@@ -85,13 +122,13 @@ function classSum(budget: ClassBudget, count: number): number {
   return listed + Math.max(0, count - budget.heaviestS.length) * budget.restMeanS;
 }
 
-/** A group's wall at `workers`: its files' budgets over the workers, plus its longest file. */
-function groupWall(files: readonly SuiteFile[], workers: number): number {
+/** A group's wall at `workers` on `profile`'s host: its files' budgets over the workers, plus its longest file. */
+function groupWall(profile: BudgetProfile, files: readonly SuiteFile[], workers: number): number {
   if (files.length === 0) return 0;
   let sum = 0;
   let longest = 0;
   for (const fileClass of new Set(files.map(classOf))) {
-    const budget = CLASS_BUDGETS[fileClass];
+    const budget = profile.classes[fileClass];
     sum += classSum(budget, files.filter((file) => classOf(file) === fileClass).length);
     longest = Math.max(longest, budget.heaviestS[0] ?? budget.restMeanS);
   }
@@ -122,14 +159,15 @@ function sequenceGroups(files: readonly SuiteFile[]): { readonly order: number; 
   });
 }
 
-/** The wall bound of a run of `files`, each group of them at the workers vitest runs it on. */
-export function runBound(files: readonly SuiteFile[]): RunBound {
+/** The wall bound of a run of `files` on the host `profileName` names, each group of them at the workers vitest runs it on. */
+export function runBound(files: readonly SuiteFile[], profileName: BudgetProfileName): RunBound {
   if (files.length === 0) throw new TestRunBudgetError("files", "a run of no test file has no bound to derive");
+  const profile: BudgetProfile = BUDGET_PROFILES[profileName];
   const groups = sequenceGroups(files);
-  const wall = groups.reduce((sum, group) => sum + groupWall(group.files, group.workers), 0);
+  const wall = groups.reduce((sum, group) => sum + groupWall(profile, group.files, group.workers), 0);
   const seconds = Math.ceil(RUN_OVERHEAD_S + BOUND_MARGIN * wall);
   const rule =
     `${files.length} test file(s) (${groups.map((group) => `${group.files.length} in group ${group.order} at ${group.workers} worker(s)`).join(", ")}): ` +
-    `${RUN_OVERHEAD_S} s overhead + ${BOUND_MARGIN} x ${Math.round(wall)} s of measured per-file wall`;
+    `${RUN_OVERHEAD_S} s overhead + ${BOUND_MARGIN} x ${Math.round(wall)} s of per-file wall measured on the ${profileName} host`;
   return { seconds, rule };
 }

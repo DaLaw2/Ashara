@@ -23,12 +23,22 @@ const shared = {
 // A TS program over the whole checkout is built by the whole-tree project's one file, once for the
 // run; every other project refuses to build one (module-program.ts).
 const refusesWholeTree = { env: { ...shared.env, [WHOLE_TREE_ENV]: "refused" } };
+// vitest runs a project with a maxWorkers of its own on that count, whatever the run's: a caller's
+// --maxWorkers=2 would still run such a project at its own, past the load the caller allowed. This
+// holds the project's own under the run's, so the run's count is a ceiling no project passes, and
+// scripts/test-run.ts budgets the count vitest then resolves.
+const workersWithinRun = {
+  name: "ashara:workers-within-run",
+  configureVitest({ project, vitest }: { project: { config: { maxWorkers: number } }; vitest: { config: { maxWorkers: number } } }): void {
+    project.config.maxWorkers = Math.min(project.config.maxWorkers, vitest.config.maxWorkers);
+  },
+};
 
 export default defineConfig({
   test: {
     // Owner rule: no unbounded resource use. Test files share one Postgres and the host's podman, so
     // the worker count is bounded (test-run-load.ts), or the run's --maxWorkers. The podman project
-    // sets a bound of its own, which neither replaces.
+    // sets a bound of its own, which runs at the lower of it and the run's (workersWithinRun).
     maxWorkers: defaultTestWorkers(),
     // The image guard runs first: a pinned test image absent from local podman storage stops the run
     // before any test, naming each such image and its pull command; the run never pulls one itself.
@@ -52,7 +62,7 @@ export default defineConfig({
     teardownTimeout: 150_000,
     // vitest runs projects of different sequence.groupOrder one after the other, each under its own
     // worker bound, and shards the files of all projects together: the podman files run after the
-    // rest, PODMAN_MAX_WORKERS at once. The whole-tree project runs beside the default one, on the
+    // rest, at most PODMAN_MAX_WORKERS at once and never more than the run's workers. The whole-tree project runs beside the default one, on the
     // same workers, and its file starts first (test-sequencer.ts).
     sequence: { sequencer: WholeTreeFirstSequencer },
     projects: [
@@ -76,6 +86,7 @@ export default defineConfig({
         },
       },
       {
+        plugins: [workersWithinRun],
         test: {
           ...refusesWholeTree,
           name: "podman",
